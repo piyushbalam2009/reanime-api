@@ -12,10 +12,12 @@ from redis.exceptions import RedisError
 from app.cache import get_json, set_json
 from app.config import settings
 from app.source import ReAnimeAdapter, SourceNotConfigured, SourceRequestError
+
 logging.basicConfig(level=getattr(logging, settings.log_level.upper(), logging.INFO))
 logger = logging.getLogger("reanime.api")
 adapter = ReAnimeAdapter()
 redis_client: Redis | None = None
+
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
@@ -35,10 +37,11 @@ async def lifespan(_: FastAPI):
         redis_client = None
     await adapter.close()
 
+
 app = FastAPI(
     title=settings.app_name,
     version="0.1.0",
-    description="Public Re:ANIME API. Source integration is being verified.",
+    description="Re:ANIME catalog and server-discovery API.",
     lifespan=lifespan,
 )
 app.add_middleware(
@@ -49,9 +52,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
 @app.middleware("http")
 async def public_rate_limit(request: Request, call_next):
-    # Open API: no key required. Redis provides a shared per-IP limit across instances.
     if request.url.path not in {"/", "/health", "/docs", "/redoc", "/openapi.json"} and redis_client is not None:
         forwarded = request.headers.get("x-forwarded-for", "")
         client_ip = forwarded.split(",")[0].strip() or (request.client.host if request.client else "unknown")
@@ -71,13 +74,16 @@ async def public_rate_limit(request: Request, call_next):
             logger.exception("Rate limiter unavailable; allowing request")
     return await call_next(request)
 
+
 @app.get("/")
 async def root() -> dict[str, Any]:
     return {"name": settings.app_name, "version": "0.1.0", "status": "running", "docs": "/docs"}
 
+
 @app.get("/health")
 async def health() -> dict[str, str]:
     return {"status": "ok"}
+
 
 @app.get("/api/status")
 async def status() -> dict[str, Any]:
@@ -96,7 +102,6 @@ async def status() -> dict[str, Any]:
             "access_mode": settings.source_access_mode,
             "browser_challenge_integration": "disabled",
         },
-        "streaming_proxy": bool(settings.stream_proxy_base_url and settings.proxy_signing_secret),
     }
 
 
@@ -107,6 +112,7 @@ async def source_error_handler(_: Request, exc: SourceRequestError):
         content={"error": "source_request_failed", "message": str(exc)},
     )
 
+
 def source_not_ready(exc: SourceNotConfigured) -> HTTPException:
     return HTTPException(
         status_code=501,
@@ -116,6 +122,7 @@ def source_not_ready(exc: SourceNotConfigured) -> HTTPException:
             "next_step": "Verify the site's actual public interface and permitted integration method.",
         },
     )
+
 
 @app.get("/api/search")
 async def search(q: str = Query(min_length=1, max_length=120), page: int = Query(1, ge=1)):
@@ -130,6 +137,7 @@ async def search(q: str = Query(min_length=1, max_length=120), page: int = Query
     except SourceNotConfigured as exc:
         raise source_not_ready(exc) from exc
 
+
 @app.get("/api/anime/{anime_id}")
 async def anime_details(anime_id: str):
     key = f"anime:details:{anime_id}"
@@ -143,6 +151,7 @@ async def anime_details(anime_id: str):
     except SourceNotConfigured as exc:
         raise source_not_ready(exc) from exc
 
+
 @app.get("/api/anime/{anime_id}/episodes")
 async def episodes(anime_id: str):
     key = f"anime:episodes:{anime_id}"
@@ -155,6 +164,7 @@ async def episodes(anime_id: str):
         return result
     except SourceNotConfigured as exc:
         raise source_not_ready(exc) from exc
+
 
 @app.get("/api/anime/{anime_id}/server")
 async def anime_server_compat(anime_id: str, episode: int = Query(1, ge=1)):
@@ -184,48 +194,3 @@ async def servers(episode_id: str):
         return result
     except SourceNotConfigured as exc:
         raise source_not_ready(exc) from exc
-
-@app.get("/api/watch/{episode_id}/{audio}")
-async def watch(episode_id: str, audio: str):
-    if audio not in {"sub", "dub"}:
-        raise HTTPException(status_code=400, detail="audio must be sub or dub")
-    try:
-        data = await adapter.playback(episode_id, audio)
-    except SourceNotConfigured as exc:
-        raise source_not_ready(exc) from exc
-
-    # This endpoint intentionally returns only a direct HLS master playlist.
-    # The original URL is preserved verbatim (including upstream query tokens).
-    master = data.get("master_m3u8")
-    if not master:
-        raise HTTPException(status_code=502, detail="No direct master.m3u8 URL was returned")
-    from app.security import ProxyTokenError, create_proxy_token
-    if not settings.stream_proxy_base_url:
-        raise HTTPException(status_code=503, detail="Streaming proxy is not configured")
-    try:
-        master_token = create_proxy_token(master)
-        proxy_base = settings.stream_proxy_base_url.rstrip("/")
-        hls_proxy_url = f"{proxy_base}/proxy/{master_token}"
-        subtitles = []
-        for track in data.get("subtitles", []):
-            item = dict(track)
-            subtitle_url = item.get("url")
-            if subtitle_url:
-                item["source_url"] = subtitle_url
-                item["hlsProxyUrl"] = f"{proxy_base}/proxy/{create_proxy_token(subtitle_url)}"
-                item["url"] = item["hlsProxyUrl"]
-            subtitles.append(item)
-    except (ProxyTokenError, TypeError, ValueError) as exc:
-        raise HTTPException(status_code=503, detail="Playback resource could not be safely proxied") from exc
-
-    return {
-        "episode_id": episode_id,
-        "audio": audio,
-        "server": data.get("server"),
-        "playback": {
-            "type": "hls",
-            "master_m3u8": master,
-            "hlsProxyUrl": hls_proxy_url,
-            "subtitles": subtitles,
-        },
-    }
