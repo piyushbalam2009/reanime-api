@@ -65,6 +65,15 @@ async def proxy_resource(token: str, request: Request):
         return Response(status_code=307, headers={"Location": f"{settings.stream_proxy_base_url.rstrip('/')}/proxy/{next_token}"})
 
     content_type = upstream.headers.get("content-type", "application/octet-stream")
+    if request.method == "HEAD":
+        response_headers = {
+            key: upstream.headers[key]
+            for key in ("content-length", "content-range", "accept-ranges", "etag", "last-modified")
+            if key in upstream.headers
+        }
+        await upstream.aclose()
+        await client.aclose()
+        return Response(status_code=upstream.status_code, media_type=content_type, headers=response_headers)
     is_playlist = source_url.lower().split("?", 1)[0].endswith(".m3u8") or "mpegurl" in content_type.lower()
     if is_playlist:
         body = await upstream.aread()
