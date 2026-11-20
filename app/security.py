@@ -5,7 +5,7 @@ import json
 import time
 from urllib.parse import urlsplit
 
-from app.main import settings
+from app.config import settings
 
 class ProxyTokenError(ValueError):
     pass
