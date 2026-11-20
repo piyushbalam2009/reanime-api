@@ -18,7 +18,7 @@ class Settings(BaseSettings):
     flaresolverr_url: str | None = None
     stream_proxy_base_url: str | None = None
     proxy_signing_secret: str | None = None
-    proxy_token_ttl_seconds: int = 300
+    proxy_token_ttl_seconds: int = 14400
 
     @property
     def allowed_hosts(self) -> set[str]:
