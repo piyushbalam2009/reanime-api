@@ -165,14 +165,15 @@ class ReAnimeAdapter:
             if exc.status_code != 404:
                 raise
             anime = await self.details(anime_id)
-            aid = self._anilist_id(anime)
+            anime_data = anime.get("anime") if isinstance(anime.get("anime"), dict) else anime
+            aid = self._anilist_id(anime_data)
             if not aid:
                 raise SourceRequestError(
                     "The watch route is unavailable and catalog metadata has no AniList ID; "
                     "cannot look up Re:ANIME servers.",
                     404,
                 ) from exc
-            watch = {"anime": anime}
+            watch = {"anime": anime_data}
 
         if aid:
             try:
