@@ -40,6 +40,7 @@ python -c "import secrets; print(secrets.token_urlsafe(48))"
 - `GET /api/anime/{id}`
 - `GET /api/anime/{id}/episodes`
 - `GET /api/episode/{id}/servers`
+- Compatibility: `GET /api/anime/{id}/server?episode=1`
 - `GET /api/watch/{episode_id}/{sub|dub}`
 - `GET /docs`
 
@@ -59,11 +60,16 @@ The source adapter now calls the public Re:ANIME JSON interfaces:
 - `GET /api/v1/search?q=...&limit=20&offset=...`
 - `GET /api/v1/anime/{anime_id}`
 - `GET /api/v1/anime/{anime_id}/episodes?limit=2000`
-- `GET /api/watch/{anime_id}/{episode_number}`
-- Optional server-list enrichment: `GET /api/flix/{anilist_id}/{episode_number}`
+- Preferred server lookup: `GET /api/watch/{anime_id}/{episode_number}`
+- Fallback/enrichment: `GET /api/flix/{anilist_id}/{episode_number}` when catalog metadata supplies an AniList ID
 
 Our public episode IDs use `{anime_id}:{episode_number}`, for example
-`solo-leveling-abc:1`. Server results are separated into `sub` and `dub`.
+`solo-leveling-abc:1`. The parser also accepts upstream-style IDs such as
+`solo-leveling-abc:ep-1`. Original episode identifiers are preserved as
+`source_episode_id` in episode-list results. Server results are separated into
+`sub` and `dub`. If the watch JSON route returns 404, the adapter resolves the
+AniList ID from anime metadata and tries the public Flix server-list endpoint
+with the corresponding watch-page Referer.
 
 ### Playback boundary
 
