@@ -2,12 +2,10 @@ from __future__ import annotations
 
 import re
 from typing import Any
-from urllib.parse import urlparse
 
 import httpx
 
 from app.config import settings
-from app.flixcloud import FlixCloudError, FlixCloudResolver
 
 
 class SourceNotConfigured(RuntimeError):
@@ -21,16 +19,11 @@ class SourceRequestError(RuntimeError):
 
 
 class ReAnimeAdapter:
-    """Client for Re:ANIME's public JSON catalog and server-list interfaces.
-
-    Embed-only player responses are returned as embeds. This adapter does not
-    reverse-engineer third-party player encryption or synthesize media URLs.
-    """
+    """Client for Re:ANIME's public catalog and server-list interfaces."""
 
     def __init__(self, client: httpx.AsyncClient | None = None):
         self._client = client
         self._owns_client = client is None
-        self._flixcloud = FlixCloudResolver(settings.source_timeout_seconds)
 
     async def start(self) -> None:
         if self._client is None:
@@ -216,110 +209,6 @@ class ReAnimeAdapter:
             "outro_start": watch.get("outro_start"),
             "outro_end": watch.get("outro_end"),
         }
-
-    @classmethod
-    def _find_master_m3u8(cls, value: Any) -> str | None:
-        """Find an explicitly exposed HLS playlist URL without treating embeds as streams."""
-        if isinstance(value, dict):
-            # Prefer fields explicitly named as HLS/master playlist URLs.
-            preferred = ("master_m3u8", "masterM3U8", "m3u8", "hls_url", "hlsUrl")
-            for key in preferred:
-                candidate = value.get(key)
-                if cls._valid_url(candidate) and ".m3u8" in urlparse(candidate).path.lower():
-                    return candidate
-            for child in value.values():
-                found = cls._find_master_m3u8(child)
-                if found:
-                    return found
-        elif isinstance(value, list):
-            for child in value:
-                found = cls._find_master_m3u8(child)
-                if found:
-                    return found
-        elif isinstance(value, str) and cls._valid_url(value):
-            if ".m3u8" in urlparse(value).path.lower():
-                return value
-        return None
-
-    @classmethod
-    def _extract_subtitles(cls, server: dict[str, Any]) -> list[dict[str, Any]]:
-        raw = server.get("subtitles") or server.get("tracks") or server.get("captions") or []
-        if isinstance(raw, dict):
-            raw = raw.get("tracks") or raw.get("subtitles") or []
-        if not isinstance(raw, list):
-            return []
-        result = []
-        for track in raw:
-            if isinstance(track, str):
-                url = track
-                item: dict[str, Any] = {"url": url}
-            elif isinstance(track, dict):
-                item = dict(track)
-                url = item.get("url") or item.get("file") or item.get("src")
-                if not url:
-                    continue
-                item["url"] = url
-            else:
-                continue
-            if cls._valid_url(url):
-                result.append(item)
-        return result
-
-    async def playback(self, episode_id: str, audio: str) -> dict[str, Any]:
-        if audio not in ("sub", "dub"):
-            raise SourceRequestError("audio must be sub or dub", 400)
-        data = await self.servers(episode_id)
-        candidates = data[audio]
-        if not candidates:
-            raise SourceRequestError(f"No {audio} server is available", 404)
-
-        last_error: FlixCloudError | None = None
-        for server in candidates:
-            # First accept a real playlist explicitly supplied by Re:ANIME.
-            master = self._find_master_m3u8(server)
-            subtitles = self._extract_subtitles(server)
-            if master:
-                return {
-                    "master_m3u8": master,
-                    "server": server.get("serverName"),
-                    "subtitles": subtitles,
-                }
-
-            # Re:ANIME currently supplies FlixCloud /e/{id}?v={variant} links.
-            # Resolve only URLs directly exposed by FlixCloud's playback JSON.
-            embed_url = server.get("dataLink") or server.get("url")
-            if not isinstance(embed_url, str):
-                continue
-            host = (urlparse(embed_url).hostname or "").lower().rstrip(".")
-            if host != "flixcloud.cc" and not host.endswith(".flixcloud.cc"):
-                continue
-            try:
-                resolved = await self._flixcloud.resolve(embed_url)
-                return {
-                    "master_m3u8": resolved["master_m3u8"],
-                    "server": server.get("serverName"),
-                    "subtitles": resolved.get("subtitles") or subtitles,
-                }
-            except FlixCloudError as exc:
-                last_error = exc
-                # Try the next provider server, but never work around access denial.
-                if exc.status_code in (403, 429):
-                    continue
-
-        if last_error:
-            raise SourceRequestError(str(last_error), last_error.status_code)
-        raise SourceRequestError(
-            f"No directly exposed master.m3u8 URL was found for {audio}. "
-            "Embed links are intentionally not returned as playback URLs.",
-            502,
-        )
-
-    @staticmethod
-    def _valid_url(value: Any) -> bool:
-        if not isinstance(value, str):
-            return False
-        parsed = urlparse(value)
-        return parsed.scheme in ("http", "https") and bool(parsed.netloc)
 
     @staticmethod
     def _validate_id(value: str) -> None:
