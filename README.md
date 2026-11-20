@@ -2,7 +2,7 @@
 
 Python/FastAPI public API targeting the permitted public interfaces of [Re:ANIME](https://reanime.cz/).
 
-**Status:** initial foundation. Source-specific routes intentionally return `501 source_not_configured` until the site's real public interfaces and authorized integration method are verified. No fake data or invented playback URLs are returned.
+**Status:** catalog and server discovery are implemented against the site's public JSON interfaces. Playback returns an explicitly exposed HLS URL through the configured proxy or a clearly labeled embed URL; it does not synthesize stream URLs or decrypt third-party player encryption.
 
 ## Stack
 - FastAPI / Python 3.11+
@@ -44,7 +44,7 @@ python -c "import secrets; print(secrets.token_urlsafe(48))"
 - `GET /api/watch/{episode_id}/{sub|dub}`
 - `GET /docs`
 
-Catalog and playback routes return a clear 501 until source interfaces are verified.
+Catalog and server-discovery routes use the configured Re:ANIME source adapter. If no supported server data is exposed, the API returns a clear upstream error rather than fabricated playback data.
 
 ## Cloudflare / FlareSolverr
 A FlareSolverr URL may be configured for a site-operator-approved integration, but this initial implementation does not invoke it or automate challenges. Do not use browser automation to evade access restrictions. Prefer an operator-provided API, integration, or IP allowlist.
