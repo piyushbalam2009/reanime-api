@@ -186,15 +186,23 @@ async def watch(episode_id: str, audio: str):
         raise HTTPException(status_code=503, detail="Streaming proxy is not configured")
     try:
         token = create_proxy_token(master)
-    except ProxyTokenError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+        proxy_base = settings.stream_proxy_base_url.rstrip("/")
+        subtitles = []
+        for track in data.get("subtitles", []):
+            item = dict(track)
+            subtitle_url = item.get("url")
+            if subtitle_url:
+                item["url"] = f"{proxy_base}/proxy/{create_proxy_token(subtitle_url)}"
+            subtitles.append(item)
+    except (ProxyTokenError, TypeError, ValueError) as exc:
+        raise HTTPException(status_code=503, detail="Playback resource could not be safely proxied") from exc
     return {
         "episode_id": episode_id,
         "audio": audio,
         "server": data.get("server"),
         "playback": {
             "type": "hls",
-            "master_m3u8": {"proxy_url": f"{settings.stream_proxy_base_url.rstrip('/')}/proxy/{token}"},
-            "subtitles": data.get("subtitles", []),
+            "master_m3u8": {"proxy_url": f"{proxy_base}/proxy/{token}", "format": "m3u8"},
+            "subtitles": subtitles,
         },
     }
