@@ -16,7 +16,12 @@ def validate_source_url(url: str) -> str:
         raise ProxyTokenError("Only HTTPS source URLs are allowed")
     if parsed.username or parsed.password:
         raise ProxyTokenError("URL credentials are not allowed")
-    if parsed.hostname.lower().rstrip(".") not in settings.allowed_hosts:
+    hostname = parsed.hostname.lower().rstrip(".")
+    allowed = any(
+        hostname == entry or (entry.startswith(".") and hostname.endswith(entry))
+        for entry in settings.allowed_hosts
+    )
+    if not allowed:
         raise ProxyTokenError("Source host is not allowlisted")
     return url
 
