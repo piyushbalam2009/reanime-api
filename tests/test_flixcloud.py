@@ -1,6 +1,8 @@
+import asyncio
+
 import pytest
 
-from app.flixcloud import FlixCloudResolver
+from app.flixcloud import FlixCloudError, FlixCloudResolver
 
 
 def test_extracts_direct_master_and_subtitle_urls_without_changing_tokens():
@@ -31,7 +33,6 @@ def test_opaque_payload_is_not_mistaken_for_a_media_url():
 
 
 def test_rejects_non_flixcloud_embed_hosts():
-    with pytest.raises(Exception):
-        # The resolver's URL validation rejects unrelated embed hosts.
-        import asyncio
+    with pytest.raises(FlixCloudError) as error:
         asyncio.run(FlixCloudResolver().resolve("https://attacker.example/e/123"))
+    assert error.value.status_code == 400
