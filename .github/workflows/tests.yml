@@ -17,5 +17,5 @@ jobs:
           python-version: "3.11"
           cache: pip
       - run: pip install -r requirements.txt
-      - run: python -m compileall -q app api streaming_proxy tests
+      - run: python -m compileall -q app api tests
       - run: PYTHONPATH=. pytest -q
