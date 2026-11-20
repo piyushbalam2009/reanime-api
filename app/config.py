@@ -12,7 +12,7 @@ class Settings(BaseSettings):
     cors_origins: str = "*"
     redis_url: str | None = None
     source_base_url: str = "https://reanime.cz"
-    source_allowed_hosts: str = "reanime.cz,www.reanime.cz"
+    source_allowed_hosts: str = "reanime.cz,www.reanime.cz,.flixcloud.cc"
     source_timeout_seconds: float = 20.0
     source_access_mode: str = "direct"
     flaresolverr_url: str | None = None
