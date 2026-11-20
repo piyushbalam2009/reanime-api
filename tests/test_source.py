@@ -63,7 +63,7 @@ async def test_servers_separate_sub_and_dub():
 
 
 @pytest.mark.asyncio
-async def test_playback_returns_embed_without_faking_hls():
+async def test_playback_rejects_embed_instead_of_returning_it():
     def handler(request):
         return httpx.Response(200, json={"anime": {}, "episode_links": [
             {"serverName": "HD-2", "dataType": "sub", "dataLink": "https://embed.example/watch/123"}
@@ -71,9 +71,10 @@ async def test_playback_returns_embed_without_faking_hls():
 
     client = httpx.AsyncClient(base_url="https://reanime.cz", transport=httpx.MockTransport(handler))
     adapter = ReAnimeAdapter(client)
-    result = await adapter.playback("demo:1", "sub")
-    assert result["embed_url"] == "https://embed.example/watch/123"
-    assert "master_m3u8" not in result
+    with pytest.raises(SourceRequestError) as error:
+        await adapter.playback("demo:1", "sub")
+    assert error.value.status_code == 502
+    assert "Embed links are intentionally not returned" in str(error.value)
     await client.aclose()
 
 
@@ -120,3 +121,23 @@ async def test_servers_fall_back_to_flix_when_watch_route_is_missing():
 @pytest.mark.asyncio
 async def test_episode_id_parser_accepts_upstream_ep_identifier():
     assert ReAnimeAdapter._parse_episode_id("demo:ep-1") == ("demo", 1)
+
+
+@pytest.mark.asyncio
+async def test_playback_extracts_master_playlist_and_subtitles_with_query_tokens():
+    master = "https://media.reanime.cz/master.m3u8?token=abc%2F123&expires=999"
+    subtitle = "https://media.reanime.cz/en.vtt?token=sub456"
+
+    def handler(request):
+        return httpx.Response(200, json={"anime": {}, "episode_links": [
+            {"serverName": "HD-2", "dataType": "sub", "dataLink": "https://player.example/embed/123",
+             "sources": [{"file": master, "type": "hls"}],
+             "subtitles": [{"url": subtitle, "lang": "English", "label": "English"}]}
+        ]})
+
+    client = httpx.AsyncClient(base_url="https://reanime.cz", transport=httpx.MockTransport(handler))
+    adapter = ReAnimeAdapter(client)
+    result = await adapter.playback("demo:1", "sub")
+    assert result["master_m3u8"] == master
+    assert result["subtitles"][0]["url"] == subtitle
+    await client.aclose()
