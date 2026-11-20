@@ -126,19 +126,39 @@ class ReAnimeAdapter:
             number = item.get("episode_number", item.get("number"))
             if number is None:
                 continue
-            output.append({**item, "id": f"{anime_id}:{number}", "anime_id": anime_id, "number": number})
+            source_episode_id = item.get("episodeId") or item.get("episode_id") or item.get("_id")
+            output.append({
+                **item,
+                "id": f"{anime_id}:{number}",
+                "anime_id": anime_id,
+                "number": number,
+                "source_episode_id": str(source_episode_id) if source_episode_id is not None else None,
+            })
         return sorted(output, key=lambda x: float(x["number"]))
 
     async def servers(self, episode_id: str) -> dict[str, Any]:
         anime_id, episode = self._parse_episode_id(episode_id)
-        watch = await self._get(f"/api/watch/{anime_id}/{episode}")
+        # Re:ANIME deployments have exposed both the legacy and versioned
+        # watch paths. Prefer the established path, then try the versioned
+        # equivalent only when the legacy route is absent.
+        try:
+            watch = await self._get(f"/api/watch/{anime_id}/{episode}")
+        except SourceRequestError as exc:
+            if exc.status_code != 404:
+                raise
+            watch = await self._get(f"/api/v1/watch/{anime_id}/{episode}")
         if not isinstance(watch, dict):
             raise SourceRequestError("Unexpected server-list response", 502)
         links = list(watch.get("episode_links") or [])
         aid = self._anilist_id(watch.get("anime") or {})
         if aid:
             try:
-                extra = await self._get(f"/api/flix/{aid}/{episode}")
+                try:
+                    extra = await self._get(f"/api/flix/{aid}/{episode}")
+                except SourceRequestError as exc:
+                    if exc.status_code != 404:
+                        raise
+                    extra = await self._get(f"/api/v1/flix/{aid}/{episode}")
                 if isinstance(extra, dict) and extra.get("success"):
                     known = {x.get("$id") for x in links if isinstance(x, dict)}
                     links.extend(x for x in extra.get("servers", []) if isinstance(x, dict) and x.get("$id") not in known)
@@ -158,6 +178,9 @@ class ReAnimeAdapter:
             "intro_end": watch.get("intro_end"),
             "outro_start": watch.get("outro_start"),
             "outro_end": watch.get("outro_end"),
+            "current": watch.get("current"),
+            "duration": watch.get("duration"),
+            "episode_links": links,
         }
 
     async def playback(self, episode_id: str, audio: str) -> dict[str, Any]:
@@ -190,8 +213,8 @@ class ReAnimeAdapter:
             raise SourceRequestError("Invalid Re:ANIME anime ID", 400)
 
     @classmethod
-    def _parse_episode_id(cls, value: str) -> tuple[str, int]:
+    def _parse_episode_id(cls, value: str) -> tuple[str, str]:
         match = re.fullmatch(r"([A-Za-z0-9_-]{1,160}):(\d+(?:\.\d+)?)", value)
         if not match:
             raise SourceRequestError("episode_id must use anime_id:episode_number", 400)
-        return match.group(1), int(float(match.group(2)))
+        return match.group(1), match.group(2)
