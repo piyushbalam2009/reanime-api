@@ -20,9 +20,11 @@ function unwrapAnime(value: unknown): Record<string, any> {
 }
 
 export async function searchAnime(q: string, limit: number, offset: number) {
+  // ReAnime's documented public search route is /api/search.
+  // Keep /api/v1/search as a compatibility fallback for deployments that expose it.
   return withLegacyFallback(
-    () => reanimeGet<unknown>("/api/v1/search", { q, limit, offset }),
-    () => reanimeGet<unknown>("/api/search", { q, limit, offset })
+    () => reanimeGet<unknown>("/api/search", { q, limit, offset }),
+    () => reanimeGet<unknown>("/api/v1/search", { q, limit, offset })
   );
 }
 
