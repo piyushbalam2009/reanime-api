@@ -156,6 +156,22 @@ async def episodes(anime_id: str):
     except SourceNotConfigured as exc:
         raise source_not_ready(exc) from exc
 
+@app.get("/api/anime/{anime_id}/server")
+async def anime_server_compat(anime_id: str, episode: int = Query(1, ge=1)):
+    """Compatibility route for clients using /api/anime/{id}/server?episode=1."""
+    episode_id = f"{anime_id}:{episode}"
+    key = f"episode:servers:{episode_id}"
+    cached = await get_json(redis_client, key)
+    if cached is not None:
+        return cached
+    try:
+        result = await adapter.servers(episode_id)
+        await set_json(redis_client, key, result, 120)
+        return result
+    except SourceNotConfigured as exc:
+        raise source_not_ready(exc) from exc
+
+
 @app.get("/api/episode/{episode_id}/servers")
 async def servers(episode_id: str):
     key = f"episode:servers:{episode_id}"
