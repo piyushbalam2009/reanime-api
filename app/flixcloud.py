@@ -115,8 +115,19 @@ class FlixCloudResolver:
                 "The resolver will not attempt to bypass the provider's access controls.",
                 response.status_code,
             )
+        if response.status_code == 410:
+            raise FlixCloudError(
+                "FlixCloud returned HTTP 410 Gone for the guessed /api/m3u8/{embed_id} path. "
+                "The HAR shows that the player requests /api/m3u8/{video_id}, where video_id "
+                "is different from the /e/{embed_id} value. The resolver needs the actual "
+                "video_id from the provider's current player response; it cannot assume both IDs match.",
+                410,
+            )
         if not response.is_success:
-            raise FlixCloudError(f"FlixCloud playback API returned HTTP {response.status_code}", 502)
+            raise FlixCloudError(
+                f"FlixCloud playback API returned HTTP {response.status_code}",
+                response.status_code if response.status_code >= 400 else 502,
+            )
 
         try:
             payload = response.json()
