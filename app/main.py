@@ -2,50 +2,7 @@ import json
 import logging
 import time
 from contextlib import asynccontextmanager
-from functools import lru_cache
-from typing import Any
-
-from fastapi import FastAPI, HTTPException, Query, Request
-from fastapi.responses import JSONResponse
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic_settings import BaseSettings, SettingsConfigDict
-from redis.asyncio import Redis
-from redis.exceptions import RedisError
-
-from app.source import ReAnimeAdapter, SourceNotConfigured
-from app.cache import get_json, set_json
-
-class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore", case_sensitive=False)
-    app_name: str = "ReAnime API"
-    app_env: str = "development"
-    log_level: str = "INFO"
-    cors_origins: str = "*"
-    redis_url: str | None = None
-    source_base_url: str = "https://reanime.cz"
-    source_allowed_hosts: str = "reanime.cz,www.reanime.cz"
-    source_timeout_seconds: float = 20.0
-    source_access_mode: str = "direct"
-    flaresolverr_url: str | None = None
-    stream_proxy_base_url: str | None = None
-    proxy_signing_secret: str | None = None
-    proxy_token_ttl_seconds: int = 300
-
-    @property
-    def allowed_hosts(self) -> set[str]:
-        return {h.strip().lower() for h in self.source_allowed_hosts.split(",") if h.strip()}
-
-    @property
-    def cors(self) -> list[str]:
-        return ["*"] if self.cors_origins.strip() == "*" else [
-            x.strip() for x in self.cors_origins.split(",") if x.strip()
-        ]
-
-@lru_cache
-def get_settings() -> Settings:
-    return Settings()
-
-settings = get_settings()
+from app.config import settings
 logging.basicConfig(level=getattr(logging, settings.log_level.upper(), logging.INFO))
 logger = logging.getLogger("reanime.api")
 adapter = ReAnimeAdapter()
