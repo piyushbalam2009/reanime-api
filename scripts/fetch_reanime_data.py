@@ -2,15 +2,16 @@
 """Fetch public Re:ANIME catalog data from GitHub Actions without FlareSolverr."""
 import json
 import os
+import re
 import sys
 from pathlib import Path
 import httpx
 
 BASE_URL = os.getenv("REANIME_BASE_URL", "https://reanime.cz").rstrip("/")
-MODE = os.getenv("FETCH_MODE", "search")
-QUERY = os.getenv("SEARCH_QUERY", "One Piece")
-ANIME_ID = os.getenv("ANIME_ID", "")
-PAGE = max(1, int(os.getenv("PAGE", "1")))
+MODE = os.getenv("FETCH_MODE") or "search"
+QUERY = os.getenv("SEARCH_QUERY") or "One Piece"
+ANIME_ID = os.getenv("ANIME_ID") or ""
+PAGE = max(1, int(os.getenv("PAGE") or "1"))
 
 def main() -> int:
     headers = {
@@ -23,10 +24,14 @@ def main() -> int:
     elif MODE == "details":
         if not ANIME_ID:
             raise ValueError("ANIME_ID is required for details mode")
+        if not re.fullmatch(r"[A-Za-z0-9_-]{1,160}", ANIME_ID):
+            raise ValueError("ANIME_ID contains unsupported characters")
         path, params = f"/api/v1/anime/{ANIME_ID}", None
     elif MODE == "episodes":
         if not ANIME_ID:
             raise ValueError("ANIME_ID is required for episodes mode")
+        if not re.fullmatch(r"[A-Za-z0-9_-]{1,160}", ANIME_ID):
+            raise ValueError("ANIME_ID contains unsupported characters")
         path, params = f"/api/v1/anime/{ANIME_ID}/episodes", {"limit": 2000}
     else:
         raise ValueError(f"Unsupported FETCH_MODE: {MODE}")
