@@ -193,42 +193,39 @@ async def watch(episode_id: str, audio: str):
         data = await adapter.playback(episode_id, audio)
     except SourceNotConfigured as exc:
         raise source_not_ready(exc) from exc
-    # Some Re:ANIME entries expose only an embed player. Return it explicitly
-    # rather than pretending it is a direct HLS playlist.
-    if data.get("embed_url"):
-        return {
-            "episode_id": episode_id,
-            "audio": audio,
-            "server": data.get("server"),
-            "playback": {"type": "embed", "embed_url": data["embed_url"], "subtitles": data.get("subtitles", [])},
-            "message": data.get("message"),
-        }
-    # Only an explicit direct HLS URL may enter the HLS proxy.
+
+    # This endpoint intentionally returns only a direct HLS master playlist.
+    # The original URL is preserved verbatim (including upstream query tokens).
     master = data.get("master_m3u8")
     if not master:
-        raise HTTPException(status_code=502, detail="No master HLS playlist was returned")
+        raise HTTPException(status_code=502, detail="No direct master.m3u8 URL was returned")
     from app.security import ProxyTokenError, create_proxy_token
     if not settings.stream_proxy_base_url:
         raise HTTPException(status_code=503, detail="Streaming proxy is not configured")
     try:
-        token = create_proxy_token(master)
+        master_token = create_proxy_token(master)
         proxy_base = settings.stream_proxy_base_url.rstrip("/")
+        hls_proxy_url = f"{proxy_base}/proxy/{master_token}"
         subtitles = []
         for track in data.get("subtitles", []):
             item = dict(track)
             subtitle_url = item.get("url")
             if subtitle_url:
-                item["url"] = f"{proxy_base}/proxy/{create_proxy_token(subtitle_url)}"
+                item["source_url"] = subtitle_url
+                item["hlsProxyUrl"] = f"{proxy_base}/proxy/{create_proxy_token(subtitle_url)}"
+                item["url"] = item["hlsProxyUrl"]
             subtitles.append(item)
     except (ProxyTokenError, TypeError, ValueError) as exc:
         raise HTTPException(status_code=503, detail="Playback resource could not be safely proxied") from exc
+
     return {
         "episode_id": episode_id,
         "audio": audio,
         "server": data.get("server"),
         "playback": {
             "type": "hls",
-            "master_m3u8": {"proxy_url": f"{proxy_base}/proxy/{token}", "format": "m3u8"},
+            "master_m3u8": master,
+            "hlsProxyUrl": hls_proxy_url,
             "subtitles": subtitles,
         },
     }
