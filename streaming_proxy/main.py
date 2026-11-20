@@ -5,7 +5,7 @@ import httpx
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import Response, StreamingResponse
 
-from app.main import settings
+from app.config import settings
 from app.security import ProxyTokenError, create_proxy_token, validate_source_url, verify_proxy_token
 
 app = FastAPI(title="ReAnime Streaming Proxy", docs_url=None, redoc_url=None)
