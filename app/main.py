@@ -11,6 +11,7 @@ from redis.asyncio import Redis
 from redis.exceptions import RedisError
 
 from app.source import ReAnimeAdapter, SourceNotConfigured
+from app.cache import get_json, set_json
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore", case_sensitive=False)
@@ -118,29 +119,53 @@ def source_not_ready(exc: SourceNotConfigured) -> HTTPException:
 
 @app.get("/api/search")
 async def search(q: str = Query(min_length=1, max_length=120), page: int = Query(1, ge=1)):
+    key = f"search:{q.strip().lower()}:{page}"
+    cached = await get_json(redis_client, key)
+    if cached is not None:
+        return cached
     try:
-        return {"query": q, "page": page, "results": await adapter.search(q, page)}
+        result = {"query": q, "page": page, "results": await adapter.search(q, page)}
+        await set_json(redis_client, key, result, 300)
+        return result
     except SourceNotConfigured as exc:
         raise source_not_ready(exc) from exc
 
 @app.get("/api/anime/{anime_id}")
 async def anime_details(anime_id: str):
+    key = f"anime:details:{anime_id}"
+    cached = await get_json(redis_client, key)
+    if cached is not None:
+        return cached
     try:
-        return await adapter.details(anime_id)
+        result = await adapter.details(anime_id)
+        await set_json(redis_client, key, result, 21600)
+        return result
     except SourceNotConfigured as exc:
         raise source_not_ready(exc) from exc
 
 @app.get("/api/anime/{anime_id}/episodes")
 async def episodes(anime_id: str):
+    key = f"anime:episodes:{anime_id}"
+    cached = await get_json(redis_client, key)
+    if cached is not None:
+        return cached
     try:
-        return {"anime_id": anime_id, "episodes": await adapter.episodes(anime_id)}
+        result = {"anime_id": anime_id, "episodes": await adapter.episodes(anime_id)}
+        await set_json(redis_client, key, result, 1800)
+        return result
     except SourceNotConfigured as exc:
         raise source_not_ready(exc) from exc
 
 @app.get("/api/episode/{episode_id}/servers")
 async def servers(episode_id: str):
+    key = f"episode:servers:{episode_id}"
+    cached = await get_json(redis_client, key)
+    if cached is not None:
+        return cached
     try:
-        return await adapter.servers(episode_id)
+        result = await adapter.servers(episode_id)
+        await set_json(redis_client, key, result, 120)
+        return result
     except SourceNotConfigured as exc:
         raise source_not_ready(exc) from exc
 
