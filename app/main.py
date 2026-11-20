@@ -11,7 +11,7 @@ from redis.exceptions import RedisError
 
 from app.cache import get_json, set_json
 from app.config import settings
-from app.source import ReAnimeAdapter, SourceNotConfigured
+from app.source import ReAnimeAdapter, SourceNotConfigured, SourceRequestError
 logging.basicConfig(level=getattr(logging, settings.log_level.upper(), logging.INFO))
 logger = logging.getLogger("reanime.api")
 adapter = ReAnimeAdapter()
@@ -20,6 +20,7 @@ redis_client: Redis | None = None
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     global redis_client
+    await adapter.start()
     if settings.redis_url:
         try:
             client = Redis.from_url(settings.redis_url, decode_responses=True, socket_connect_timeout=3)
@@ -32,6 +33,7 @@ async def lifespan(_: FastAPI):
     if redis_client is not None:
         await redis_client.aclose()
         redis_client = None
+    await adapter.close()
 
 app = FastAPI(
     title=settings.app_name,
@@ -90,12 +92,20 @@ async def status() -> dict[str, Any]:
         "redis": "connected" if redis_ok else "unavailable",
         "source": {
             "website": settings.source_base_url,
-            "adapter": "not_configured",
+            "adapter": "initialized",
             "access_mode": settings.source_access_mode,
             "browser_challenge_integration": "disabled",
         },
         "streaming_proxy": bool(settings.stream_proxy_base_url and settings.proxy_signing_secret),
     }
+
+
+@app.exception_handler(SourceRequestError)
+async def source_error_handler(_: Request, exc: SourceRequestError):
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"error": "source_request_failed", "message": str(exc)},
+    )
 
 def source_not_ready(exc: SourceNotConfigured) -> HTTPException:
     return HTTPException(
@@ -167,7 +177,17 @@ async def watch(episode_id: str, audio: str):
         data = await adapter.playback(episode_id, audio)
     except SourceNotConfigured as exc:
         raise source_not_ready(exc) from exc
-    # Only the verified source adapter may supply this URL.
+    # Some Re:ANIME entries expose only an embed player. Return it explicitly
+    # rather than pretending it is a direct HLS playlist.
+    if data.get("embed_url"):
+        return {
+            "episode_id": episode_id,
+            "audio": audio,
+            "server": data.get("server"),
+            "playback": {"type": "embed", "embed_url": data["embed_url"], "subtitles": data.get("subtitles", [])},
+            "message": data.get("message"),
+        }
+    # Only an explicit direct HLS URL may enter the HLS proxy.
     master = data.get("master_m3u8")
     if not master:
         raise HTTPException(status_code=502, detail="No master HLS playlist was returned")
