@@ -1,17 +1,19 @@
 # ReAnime API
 
-Python/FastAPI public API targeting the permitted public interfaces of [Re:ANIME](https://reanime.cz/).
+A Python/FastAPI wrapper for Re:ANIME's catalog and episode server-list interfaces.
 
-**Status:** catalog and server discovery are implemented against the site's public JSON interfaces. Playback returns an explicitly exposed HLS URL through the configured proxy or a clearly labeled embed URL; it does not synthesize stream URLs or decrypt third-party player encryption.
+The current scope is limited to anime discovery, metadata, episode lists, and server listings. Media playback and stream processing are intentionally outside this version.
 
 ## Stack
-- FastAPI / Python 3.11+
-- Vercel Python function (`api/index.py`)
-- Redis-compatible cache (Upstash recommended)
-- Separate FastAPI HLS proxy for VPS deployment
-- HMAC-signed, short-lived proxy tokens and exact upstream host allowlist
+
+- Python 3.11+
+- FastAPI
+- HTTPX
+- Optional Redis-compatible cache
+- Vercel Python function (api/index.py)
 
 ## Local setup
+
 ```bash
 python -m venv .venv
 # Windows: .venv\Scripts\activate
@@ -20,69 +22,45 @@ pip install -r requirements.txt
 cp .env.example .env
 uvicorn app.main:app --reload
 ```
-Docs: http://127.0.0.1:8000/docs
+
+API docs: http://127.0.0.1:8000/docs
 
 ## Environment
-Configure values from `.env.example`. Generate `PROXY_SIGNING_SECRET` with:
-```bash
-python -c "import secrets; print(secrets.token_urlsafe(48))"
-``
+
+Configure the values in .env.example. Redis is optional; without it, the API runs without shared caching or distributed rate limiting.
+
+## API routes
+
+| Method | Route | Purpose |
+|---|---|---|
+| GET | / | API information |
+| GET | /health | Health check |
+| GET | /api/status | API and source status |
+| GET | /api/search?q=...&page=1 | Search anime |
+| GET | /api/anime/{anime_id} | Anime details |
+| GET | /api/anime/{anime_id}/episodes | Episode list |
+| GET | /api/episode/{anime_id}:{episode}/servers | Episode server listings |
+| GET | /api/anime/{anime_id}/server?episode=1 | Compatibility server-list route |
+| GET | /docs | Interactive API documentation |
+
+## Source interfaces currently used
+
+- GET /api/v1/search?q=...&limit=20&offset=...
+- GET /api/v1/anime/{anime_id}
+- GET /api/v1/anime/{anime_id}/episodes?limit=2000
+- Preferred server lookup: GET /api/watch/{anime_id}/{episode_number}
+- Server-list fallback/enrichment: GET /api/flix/{anilist_id}/{episode_number}
+
+Public episode IDs use the format {anime_id}:{episode_number}, for example solo-leveling-abc:1. Upstream-style IDs such as solo-leveling-abc:ep-1 are also accepted.
+
+Server results are returned in separate sub and dub arrays. Server-list responses contain provider listing metadata only; this API does not resolve those listings into media playback.
+
+## Verification
+
+Tests use mocked HTTP responses. They cover search parameters, episode normalization and sorting, server-list SUB/DUB grouping, fallback lookup, and invalid episode IDs. Mock tests do not guarantee that the live source currently accepts every endpoint.
 
 ## Deployment
-- Connect the repo to Vercel; entry point is `api/index.py`.
-- Deploy `streaming_proxy.main:app` separately on a VPS suited to sustained media delivery.
-- Configure the same signing secret and a narrow `SOURCE_ALLOWED_HOSTS` allowlist on both services.
-- Keep Redis and any browser-session service private.
 
-## Routes
-- `GET /`, `GET /health`, `GET /api/status`
-- `GET /api/search?q=...`
-- `GET /api/anime/{id}`
-- `GET /api/anime/{id}/episodes`
-- `GET /api/episode/{id}/servers`
-- Compatibility: `GET /api/anime/{id}/server?episode=1`
-- `GET /api/watch/{episode_id}/{sub|dub}`
-- `GET /docs`
-
-Catalog and server-discovery routes use the configured Re:ANIME source adapter. If no supported server data is exposed, the API returns a clear upstream error rather than fabricated playback data.
-
-## Cloudflare / FlareSolverr
-A FlareSolverr URL may be configured for a site-operator-approved integration, but this initial implementation does not invoke it or automate challenges. Do not use browser automation to evade access restrictions. Prefer an operator-provided API, integration, or IP allowlist.
-
-## Security
-The streaming proxy accepts signed tokens only; it is not an arbitrary URL proxy. It validates HTTPS and exact allowlisted hosts, does not automatically follow redirects, and rewrites HLS references to signed proxy URLs. Respect the source operator's permissions, rate limits, and terms.
-
-
-## Re:ANIME source adapter
-
-The source adapter now calls the public Re:ANIME JSON interfaces:
-
-- `GET /api/v1/search?q=...&limit=20&offset=...`
-- `GET /api/v1/anime/{anime_id}`
-- `GET /api/v1/anime/{anime_id}/episodes?limit=2000`
-- Preferred server lookup: `GET /api/watch/{anime_id}/{episode_number}`
-- Fallback/enrichment: `GET /api/flix/{anilist_id}/{episode_number}` when catalog metadata supplies an AniList ID
-
-Our public episode IDs use `{anime_id}:{episode_number}`, for example
-`solo-leveling-abc:1`. The parser also accepts upstream-style IDs such as
-`solo-leveling-abc:ep-1`. Original episode identifiers are preserved as
-`source_episode_id` in episode-list results. Server results are separated into
-`sub` and `dub`. If the watch JSON route returns 404, the adapter resolves the
-AniList ID from anime metadata and tries the public Flix server-list endpoint
-with the corresponding watch-page Referer.
-
-### Playback boundary
-
-If the upstream response explicitly contains a direct HLS URL, the API can pass
-it to the configured proxy (subject to the proxy host allowlist). If Re:ANIME
-only returns an embed player URL, the watch endpoint returns
-`playback.type = "embed"`. It does not claim that an embed is an M3U8 stream,
-and it does not reverse-engineer or defeat third-party player encryption.
-
-### Verification status
-
-Adapter tests use mocked HTTP responses. They verify parsing, pagination
-parameters, SUB/DUB grouping, embed fallback, and invalid-ID rejection. They
-do not prove that the live site currently accepts every endpoint or that an
-embed produces playable media. Confirm live behavior with a permitted test
-title before deploying publicly.
+- Vercel entry point: api/index.py
+- VPS command: uvicorn app.main:app --host 0.0.0.0 --port 8100
+- Keep environment variables and Redis credentials private.
