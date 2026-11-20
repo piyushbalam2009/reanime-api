@@ -7,6 +7,7 @@ from urllib.parse import urlparse
 import httpx
 
 from app.config import settings
+from app.flixcloud import FlixCloudError, FlixCloudResolver
 
 
 class SourceNotConfigured(RuntimeError):
@@ -29,6 +30,7 @@ class ReAnimeAdapter:
     def __init__(self, client: httpx.AsyncClient | None = None):
         self._client = client
         self._owns_client = client is None
+        self._flixcloud = FlixCloudResolver(settings.source_timeout_seconds)
 
     async def start(self) -> None:
         if self._client is None:
@@ -270,17 +272,42 @@ class ReAnimeAdapter:
         candidates = data[audio]
         if not candidates:
             raise SourceRequestError(f"No {audio} server is available", 404)
+
+        last_error: FlixCloudError | None = None
         for server in candidates:
-            # Walk provider metadata for a real .m3u8 URL. Never return dataLink/embed URLs.
+            # First accept a real playlist explicitly supplied by Re:ANIME.
             master = self._find_master_m3u8(server)
+            subtitles = self._extract_subtitles(server)
             if master:
                 return {
                     "master_m3u8": master,
                     "server": server.get("serverName"),
-                    "subtitles": self._extract_subtitles(server),
+                    "subtitles": subtitles,
                 }
+
+            # Re:ANIME currently supplies FlixCloud /e/{id}?v={variant} links.
+            # Resolve only URLs directly exposed by FlixCloud's playback JSON.
+            embed_url = server.get("dataLink") or server.get("url")
+            if not isinstance(embed_url, str):
+                continue
+            try:
+                resolved = await self._flixcloud.resolve(embed_url)
+                return {
+                    "master_m3u8": resolved["master_m3u8"],
+                    "server": server.get("serverName"),
+                    "subtitles": resolved.get("subtitles") or subtitles,
+                }
+            except FlixCloudError as exc:
+                last_error = exc
+                # Try the next provider server, but never work around access denial.
+                if exc.status_code in (403, 429):
+                    continue
+
+        if last_error:
+            raise SourceRequestError(str(last_error), last_error.status_code)
         raise SourceRequestError(
-            f"No direct master.m3u8 URL was exposed for {audio}; provider returned no usable HLS playlist. Embed links are intentionally not returned.",
+            f"No directly exposed master.m3u8 URL was found for {audio}. "
+            "Embed links are not returned as playback URLs.",
             502,
         )
 
