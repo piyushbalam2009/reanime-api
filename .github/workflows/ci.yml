@@ -30,3 +30,41 @@ jobs:
 
       - name: Smoke tests
         run: npm test
+
+      - name: Start API for curl integration checks
+        run: |
+          HOST=127.0.0.1 PORT=8080 NODE_ENV=test npm start > /tmp/reanime-api.log 2>&1 &
+          echo $! > /tmp/reanime-api.pid
+          for attempt in {1..40}; do
+            if curl --fail --silent http://127.0.0.1:8080/api/health; then
+              echo "API is ready"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "::error::API failed to start"
+          cat /tmp/reanime-api.log
+          exit 1
+
+      - name: Curl every public endpoint (Bleach live integration)
+        id: curl-integration
+        continue-on-error: true
+        run: bash scripts/curl-integration.sh
+
+      - name: Upload curl request and response logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: reanime-curl-integration
+          path: |
+            curl-results/
+            /tmp/reanime-api.log
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Stop API
+        if: always()
+        run: |
+          if [ -f /tmp/reanime-api.pid ]; then
+            kill "$(cat /tmp/reanime-api.pid)" 2>/dev/null || true
+          fi
