@@ -76,16 +76,35 @@ async def proxy_resource(token: str, request: Request):
         return Response(status_code=upstream.status_code, media_type=content_type, headers=response_headers)
     is_playlist = source_url.lower().split("?", 1)[0].endswith(".m3u8") or "mpegurl" in content_type.lower()
     if is_playlist:
-        body = await upstream.aread()
+        if upstream.status_code >= 400:
+            body = await upstream.aread()
+            await upstream.aclose()
+            await client.aclose()
+            return Response(body, status_code=upstream.status_code, media_type=content_type)
+        declared_size = upstream.headers.get("content-length")
+        if declared_size and declared_size.isdigit() and int(declared_size) > MAX_PLAYLIST_BYTES:
+            await upstream.aclose()
+            await client.aclose()
+            raise HTTPException(status_code=413, detail="Playlist too large")
+        chunks = []
+        total = 0
+        async for chunk in upstream.aiter_bytes():
+            total += len(chunk)
+            if total > MAX_PLAYLIST_BYTES:
+                await upstream.aclose()
+                await client.aclose()
+                raise HTTPException(status_code=413, detail="Playlist too large")
+            chunks.append(chunk)
         await upstream.aclose()
         await client.aclose()
-        if len(body) > MAX_PLAYLIST_BYTES:
-            raise HTTPException(status_code=413, detail="Playlist too large")
         try:
-            text = rewrite_playlist(body.decode("utf-8-sig"), source_url, claims["exp"])
-        except (UnicodeDecodeError, ProxyTokenError) as exc:
-            raise HTTPException(status_code=502, detail="Unable to safely rewrite playlist") from exc
-        return Response(text, status_code=upstream.status_code, media_type="application/vnd.apple.mpegurl", headers={"Cache-Control": "private, no-store"})
+            text = b"".join(chunks).decode("utf-8-sig")
+            if not text.lstrip().startswith("#EXTM3U"):
+                raise ValueError("Upstream response is not an HLS playlist")
+            rewritten = rewrite_playlist(text, source_url, claims["exp"])
+        except (UnicodeDecodeError, ProxyTokenError, ValueError) as exc:
+            raise HTTPException(status_code=502, detail="Unable to safely rewrite HLS playlist") from exc
+        return Response(rewritten, status_code=upstream.status_code, media_type="application/vnd.apple.mpegurl", headers={"Cache-Control": "private, no-store"})
 
     forwarded = {}
     for name in ("content-length", "content-range", "accept-ranges", "etag", "last-modified"):
