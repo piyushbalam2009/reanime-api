@@ -44,6 +44,43 @@ async def test_episode_ids_and_sorting():
 
 
 @pytest.mark.asyncio
+async def test_episode_preserves_upstream_episode_id():
+    def handler(request):
+        return httpx.Response(200, json={"episodes": [
+            {"episodeId": "ep-1", "episode_number": 1, "playable": True}
+        ]})
+
+    client = httpx.AsyncClient(base_url="https://reanime.cz", transport=httpx.MockTransport(handler))
+    adapter = ReAnimeAdapter(client)
+    episodes = await adapter.episodes("sample-anime")
+    assert episodes[0]["id"] == "sample-anime:1"
+    assert episodes[0]["source_episode_id"] == "ep-1"
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_servers_falls_back_to_versioned_watch_route():
+    calls = []
+
+    def handler(request):
+        calls.append(request.url.path)
+        if request.url.path == "/api/watch/demo/1":
+            return httpx.Response(404, json={})
+        if request.url.path == "/api/v1/watch/demo/1":
+            return httpx.Response(200, json={"anime": {}, "episode_links": [
+                {"serverName": "HD-1", "dataType": "sub", "dataLink": "https://embed.example/sub"}
+            ]})
+        return httpx.Response(404, json={})
+
+    client = httpx.AsyncClient(base_url="https://reanime.cz", transport=httpx.MockTransport(handler))
+    adapter = ReAnimeAdapter(client)
+    result = await adapter.servers("demo:1")
+    assert result["sub"][0]["dataLink"] == "https://embed.example/sub"
+    assert calls == ["/api/watch/demo/1", "/api/v1/watch/demo/1"]
+    await client.aclose()
+
+
+@pytest.mark.asyncio
 async def test_servers_separate_sub_and_dub():
     def handler(request):
         if request.url.path == "/api/watch/demo/1":

@@ -40,6 +40,7 @@ python -c "import secrets; print(secrets.token_urlsafe(48))"
 - `GET /api/anime/{id}`
 - `GET /api/anime/{id}/episodes`
 - `GET /api/episode/{id}/servers`
+- Compatibility alias: `GET /api/anime/{anime_id}/server?episode=1`
 - `GET /api/watch/{episode_id}/{sub|dub}`
 - `GET /docs`
 
@@ -63,7 +64,12 @@ The source adapter now calls the public Re:ANIME JSON interfaces:
 - Optional server-list enrichment: `GET /api/flix/{anilist_id}/{episode_number}`
 
 Our public episode IDs use `{anime_id}:{episode_number}`, for example
-`solo-leveling-abc:1`. Server results are separated into `sub` and `dub`.
+`solo-leveling-abc:1`. The original upstream episode identifier (when present,
+such as `ep-1`) is preserved separately as `source_episode_id`; it is not
+substituted for the anime slug and episode number used by the server lookup.
+Server results are separated into `sub` and `dub`. The adapter tries the
+legacy `/api/watch/{slug}/{episode}` path first and falls back to
+`/api/v1/watch/{slug}/{episode}` only when the legacy path returns 404.
 
 ### Playback boundary
 
