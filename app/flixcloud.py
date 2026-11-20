@@ -35,6 +35,7 @@ class FlixCloudResolver:
         elif isinstance(value, list):
             for child in value:
                 yield "", child
+                yield from FlixCloudResolver._walk(child)
 
     @staticmethod
     def _absolute_url(value: Any) -> bool:
