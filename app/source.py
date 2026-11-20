@@ -215,6 +215,54 @@ class ReAnimeAdapter:
             "outro_end": watch.get("outro_end"),
         }
 
+    @classmethod
+    def _find_master_m3u8(cls, value: Any) -> str | None:
+        """Find an explicitly exposed HLS playlist URL without treating embeds as streams."""
+        if isinstance(value, dict):
+            # Prefer fields explicitly named as HLS/master playlist URLs.
+            preferred = ("master_m3u8", "masterM3U8", "m3u8", "hls_url", "hlsUrl")
+            for key in preferred:
+                candidate = value.get(key)
+                if cls._valid_url(candidate) and ".m3u8" in urlparse(candidate).path.lower():
+                    return candidate
+            for child in value.values():
+                found = cls._find_master_m3u8(child)
+                if found:
+                    return found
+        elif isinstance(value, list):
+            for child in value:
+                found = cls._find_master_m3u8(child)
+                if found:
+                    return found
+        elif isinstance(value, str) and cls._valid_url(value):
+            if ".m3u8" in urlparse(value).path.lower():
+                return value
+        return None
+
+    @classmethod
+    def _extract_subtitles(cls, server: dict[str, Any]) -> list[dict[str, Any]]:
+        raw = server.get("subtitles") or server.get("tracks") or server.get("captions") or []
+        if isinstance(raw, dict):
+            raw = raw.get("tracks") or raw.get("subtitles") or []
+        if not isinstance(raw, list):
+            return []
+        result = []
+        for track in raw:
+            if isinstance(track, str):
+                url = track
+                item: dict[str, Any] = {"url": url}
+            elif isinstance(track, dict):
+                item = dict(track)
+                url = item.get("url") or item.get("file") or item.get("src")
+                if not url:
+                    continue
+                item["url"] = url
+            else:
+                continue
+            if cls._valid_url(url):
+                result.append(item)
+        return result
+
     async def playback(self, episode_id: str, audio: str) -> dict[str, Any]:
         if audio not in ("sub", "dub"):
             raise SourceRequestError("audio must be sub or dub", 400)
@@ -223,14 +271,18 @@ class ReAnimeAdapter:
         if not candidates:
             raise SourceRequestError(f"No {audio} server is available", 404)
         for server in candidates:
-            url = server.get("master_m3u8") or server.get("m3u8") or server.get("url")
-            if self._valid_url(url) and ".m3u8" in urlparse(url).path.lower():
-                return {"master_m3u8": url, "server": server.get("serverName"), "subtitles": server.get("subtitles") or []}
-        chosen = candidates[0]
-        embed = chosen.get("dataLink") or chosen.get("embedUrl") or chosen.get("embed")
-        if self._valid_url(embed):
-            return {"embed_url": embed, "server": chosen.get("serverName"), "subtitles": [], "message": "Upstream exposes an embed player, not a direct HLS URL."}
-        raise SourceRequestError("No usable playback URL was exposed by Re:ANIME", 502)
+            # Walk provider metadata for a real .m3u8 URL. Never return dataLink/embed URLs.
+            master = self._find_master_m3u8(server)
+            if master:
+                return {
+                    "master_m3u8": master,
+                    "server": server.get("serverName"),
+                    "subtitles": self._extract_subtitles(server),
+                }
+        raise SourceRequestError(
+            f"No direct master.m3u8 URL was exposed for {audio}; provider returned no usable HLS playlist. Embed links are intentionally not returned.",
+            502,
+        )
 
     @staticmethod
     def _valid_url(value: Any) -> bool:
