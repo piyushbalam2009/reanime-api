@@ -99,4 +99,4 @@ See .env.example. Set CORS_ORIGINS to comma-separated trusted origins in product
 
 ## CI
 
-GitHub Actions runs TypeScript typechecking and a production build on pushes and pull requests to main.
+GitHub Actions runs TypeScript typechecking, a production build, and smoke tests on pushes and pull requests to main. It then starts the built API and uses `curl` to call `/`, `/api/health`, `/api/search?q=Bleach`, and—using a slug returned by that search—`/api/anime/:slug`, `/api/episodes/:slug`, `/api/servers/:slug/1`, and both `/api/watch/:slug/1/sub` and `/api/watch/:slug/1/dub`. Request/response JSON and server logs are uploaded as the `reanime-curl-integration` artifact. Because these live checks depend on ReAnime.to availability and its current response schema, their failure is reported but does not fail the core build job.
