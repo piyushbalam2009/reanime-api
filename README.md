@@ -50,3 +50,33 @@ A FlareSolverr URL may be configured for a site-operator-approved integration, b
 
 ## Security
 The streaming proxy accepts signed tokens only; it is not an arbitrary URL proxy. It validates HTTPS and exact allowlisted hosts, does not automatically follow redirects, and rewrites HLS references to signed proxy URLs. Respect the source operator's permissions, rate limits, and terms.
+
+
+## Re:ANIME source adapter
+
+The source adapter now calls the public Re:ANIME JSON interfaces:
+
+- `GET /api/v1/search?q=...&limit=20&offset=...`
+- `GET /api/v1/anime/{anime_id}`
+- `GET /api/v1/anime/{anime_id}/episodes?limit=2000`
+- `GET /api/watch/{anime_id}/{episode_number}`
+- Optional server-list enrichment: `GET /api/flix/{anilist_id}/{episode_number}`
+
+Our public episode IDs use `{anime_id}:{episode_number}`, for example
+`solo-leveling-abc:1`. Server results are separated into `sub` and `dub`.
+
+### Playback boundary
+
+If the upstream response explicitly contains a direct HLS URL, the API can pass
+it to the configured proxy (subject to the proxy host allowlist). If Re:ANIME
+only returns an embed player URL, the watch endpoint returns
+`playback.type = "embed"`. It does not claim that an embed is an M3U8 stream,
+and it does not reverse-engineer or defeat third-party player encryption.
+
+### Verification status
+
+Adapter tests use mocked HTTP responses. They verify parsing, pagination
+parameters, SUB/DUB grouping, embed fallback, and invalid-ID rejection. They
+do not prove that the live site currently accepts every endpoint or that an
+embed produces playable media. Confirm live behavior with a permitted test
+title before deploying publicly.
