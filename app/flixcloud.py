@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 from typing import Any
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import urlparse
 
 import httpx
 
@@ -86,7 +86,6 @@ class FlixCloudResolver:
             raise FlixCloudError("Could not identify the FlixCloud video ID in the server URL", 422)
 
         video_id = match.group(1)
-        version = parse_qs(parsed.query).get("v", [""])[0]
         referer = embed_url
 
         headers = {
@@ -97,14 +96,13 @@ class FlixCloudResolver:
         }
 
         api_url = f"{self.BASE_URL}/api/m3u8/{video_id}"
-        params = {"v": version} if version else None
 
         try:
             async with httpx.AsyncClient(
                 timeout=httpx.Timeout(self.timeout_seconds),
                 follow_redirects=False,
             ) as client:
-                response = await client.get(api_url, params=params, headers=headers)
+                response = await client.get(api_url, headers=headers)
         except httpx.TimeoutException as exc:
             raise FlixCloudError("FlixCloud playback API timed out", 504) from exc
         except httpx.HTTPError as exc:
