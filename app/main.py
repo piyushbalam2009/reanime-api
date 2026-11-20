@@ -1,10 +1,12 @@
 import json
 import logging
+import time
 from contextlib import asynccontextmanager
 from functools import lru_cache
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from redis.asyncio import Redis
@@ -78,6 +80,28 @@ app.add_middleware(
     allow_methods=["GET", "HEAD", "OPTIONS"],
     allow_headers=["*"],
 )
+
+@app.middleware("http")
+async def public_rate_limit(request: Request, call_next):
+    # Open API: no key required. Redis provides a shared per-IP limit across instances.
+    if request.url.path not in {"/", "/health", "/docs", "/redoc", "/openapi.json"} and redis_client is not None:
+        forwarded = request.headers.get("x-forwarded-for", "")
+        client_ip = forwarded.split(",")[0].strip() or (request.client.host if request.client else "unknown")
+        bucket = int(time.time() // 60)
+        key = f"rate:{client_ip}:{bucket}"
+        try:
+            count = await redis_client.incr(key)
+            if count == 1:
+                await redis_client.expire(key, 65)
+            if count > 120:
+                return JSONResponse(
+                    status_code=429,
+                    content={"error": "rate_limit_exceeded", "message": "Limit is 120 requests per minute."},
+                    headers={"Retry-After": "60"},
+                )
+        except RedisError:
+            logger.exception("Rate limiter unavailable; allowing request")
+    return await call_next(request)
 
 @app.get("/")
 async def root() -> dict[str, Any]:
