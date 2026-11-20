@@ -290,6 +290,9 @@ class ReAnimeAdapter:
             embed_url = server.get("dataLink") or server.get("url")
             if not isinstance(embed_url, str):
                 continue
+            host = (urlparse(embed_url).hostname or "").lower().rstrip(".")
+            if host != "flixcloud.cc" and not host.endswith(".flixcloud.cc"):
+                continue
             try:
                 resolved = await self._flixcloud.resolve(embed_url)
                 return {
@@ -307,7 +310,7 @@ class ReAnimeAdapter:
             raise SourceRequestError(str(last_error), last_error.status_code)
         raise SourceRequestError(
             f"No directly exposed master.m3u8 URL was found for {audio}. "
-            "Embed links are not returned as playback URLs.",
+            "Embed links are intentionally not returned as playback URLs.",
             502,
         )
 
