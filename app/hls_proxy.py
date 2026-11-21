@@ -71,7 +71,7 @@ def rewrite_playlist(body: str, base_url: str, request: Request) -> str:
                 )
             )
         else:
-            output.append(_proxy_uri(request, urljoin(base_url, line)))
+            output.append(proxy_url_for(request, urljoin(base_url, line)))
     return "\n".join(output) + ("\n" if body.endswith(("\n", "\r")) else "")
 
 
