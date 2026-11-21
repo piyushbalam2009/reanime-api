@@ -1,33 +1,22 @@
 # ReAnime API
 
-A Python/FastAPI wrapper for Re:ANIME's catalog and episode server-list interfaces.
+A Python/FastAPI wrapper for Re:ANIME's catalog and episode server-list interfaces, with FlixCloud playback resolution.
 
-The API supports anime discovery, metadata, episode lists, server listings, and an initial FlixCloud metadata resolver. The resolver does not yet produce a playable HLS URL because the captured player uses an additional protected client-side processing stage.
-
-## Stack
+## Requirements
 
 - Python 3.11+
-- FastAPI
-- HTTPX
-- Optional Redis-compatible cache
-- Vercel Python function (api/index.py)
+- Node.js 20+ on PATH (required for the FlixCloud WASM resolver)
+- FastAPI, HTTPX, optional Redis
 
-## Local setup
+## Setup
 
-```bash
+\`\`\`bash
 python -m venv .venv
-# Windows: .venv\Scripts\activate
-# Linux/macOS: source .venv/bin/activate
+source .venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env
 uvicorn app.main:app --reload
-```
-
-API docs: http://127.0.0.1:8000/docs
-
-## Environment
-
-Configure the values in .env.example. Redis is optional; without it, the API runs without shared caching or distributed rate limiting.
+\`\`\`
 
 ## API routes
 
@@ -40,28 +29,24 @@ Configure the values in .env.example. Redis is optional; without it, the API run
 | GET | /api/anime/{anime_id} | Anime details |
 | GET | /api/anime/{anime_id}/episodes | Episode list |
 | GET | /api/episode/{anime_id}:{episode}/servers | Episode server listings |
-| GET | /api/episode/{anime_id}:{episode}/resolve?audio=sub&server=HD-2 | Inspect selected FlixCloud embed metadata |
+| GET | /api/episode/{anime_id}:{episode}/resolve?audio=sub&server=HD-2 | Resolve selected FlixCloud embed to HLS + subtitles |
 | GET | /api/anime/{anime_id}/server?episode=1 | Compatibility server-list route |
-| GET | /docs | Interactive API documentation |
 
-## Source interfaces currently used
+## FlixCloud playback
 
-- GET /api/v1/search?q=...&limit=20&offset=...
-- GET /api/v1/anime/{anime_id}
-- GET /api/v1/anime/{anime_id}/episodes?limit=2000
-- Preferred server lookup: GET /api/watch/{anime_id}/{episode_number}
-- Server-list fallback/enrichment: GET /api/flix/{anilist_id}/{episode_number}
+Each resolve request fetches a fresh embed page, reads its current SSR player data and WASM payload, obtains its one-time playback token, and resolves the HLS URL and subtitle tracks. The token metadata request is performed exactly once. A 410 response is surfaced without retrying. Do not cache tokens or resolved stream URLs.
 
-Public episode IDs use the format {anime_id}:{episode_number}, for example solo-leveling-abc:1. Upstream-style IDs such as solo-leveling-abc:ep-1 are also accepted.
-
-Server results are returned in separate sub and dub arrays. The FlixCloud resolver accepts only HTTPS embed URLs on flixcloud.cc, extracts the embed ID and video_id when exposed in the HTML, and requests the observed /api/m3u8/{video_id} metadata endpoint. It intentionally does not execute provider JavaScript/WASM, decrypt opaque playback payloads, or bypass provider access controls. Its response reports playback_ready=false until a provider-approved playback integration is available.
+The response includes playback.url, playback.subtitles, playback.thumbnails_vtt, video title, and intro/outro chapter metadata. Node.js 20+ must be available to the PM2 process. This resolver returns the provider's HLS URL directly; it does not implement an HLS proxy.
 
 ## Verification
 
-Tests use mocked HTTP responses. They cover search parameters, episode normalization and sorting, server-list SUB/DUB grouping, fallback lookup, invalid episode IDs, FlixCloud URL validation, video ID extraction, metadata sanitization, and provider-denial handling. Mock tests do not guarantee that the live source currently accepts every endpoint.
+\`\`\`bash
+PYTHONPATH=. pytest -q
+python -m compileall -q app api tests
+node --check app/resolvers/flixcloud_decrypt.mjs
+\`\`\`
 
 ## Deployment
 
-- Vercel entry point: api/index.py
 - VPS command: uvicorn app.main:app --host 0.0.0.0 --port 8100
 - Keep environment variables and Redis credentials private.
