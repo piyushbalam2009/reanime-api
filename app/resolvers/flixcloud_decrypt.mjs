@@ -68,10 +68,15 @@ async function requestTokenMetadata(flaresolverrUrl, sessionId, embedUrl, token)
   try {
     return JSON.parse(body);
   } catch {
-    if (body.toLowerCase().includes("just a moment")) {
-      throw new Error("FlareSolverr could not complete the Cloudflare challenge for token metadata");
+    const normalized = body.replace(/[\\r\\n\\t]+/g, " ").replaceAll(token, "[redacted]");
+    const preview = normalized.slice(0, 180);
+    if (/just a moment|cf-mitigated|challenges\\.cloudflare\\.com/i.test(body)) {
+      throw new Error("FlareSolverr returned a Cloudflare challenge page for token metadata (HTTP " + status + ")");
     }
-    throw new Error("FlixCloud token metadata was not valid JSON");
+    throw new Error(
+      "FlixCloud token metadata was not valid JSON (HTTP " + status +
+      ", body length " + body.length + ", preview: " + preview + ")"
+    );
   }
 }
 async function main() {
