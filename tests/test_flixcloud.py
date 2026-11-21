@@ -38,6 +38,8 @@ def test_safe_subtitles_filters_bad_urls():
 
 def _flaresolverr_mock(html):
     def handler(request):
+        if request.method == "GET":
+            return httpx.Response(200, text=html, headers={"content-type": "text/html"})
         payload = json.loads(request.content)
         cmd = payload["cmd"]
         if cmd in ("sessions.create", "sessions.destroy"):
@@ -45,7 +47,11 @@ def _flaresolverr_mock(html):
         if cmd == "request.get":
             return httpx.Response(200, json={
                 "status": "ok",
-                "solution": {"status": 200, "response": html, "cookies": [], "userAgent": "test"},
+                "solution": {
+                    "status": 200, "response": "<html>origin ready</html>",
+                    "cookies": [{"name": "cf_clearance", "value": "clear", "domain": ".flixcloud.cc"}],
+                    "userAgent": "test",
+                },
             })
         return httpx.Response(400, json={"status": "error", "message": "unsupported"})
     return handler
