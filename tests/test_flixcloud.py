@@ -58,6 +58,18 @@ async def test_resolve_extracts_video_id_and_fetches_metadata_without_exposing_o
     await client.aclose()
 
 
+def test_safe_metadata_reads_nested_metadata_and_omits_opaque_fields():
+    payload = {
+        "metadata": {"version": "2.1", "timestamp": 1795243201531},
+        "obfuscated_crypto_data": {"secret": "never-return"},
+        "token": "never-return",
+    }
+    assert FlixCloudResolver._safe_metadata(payload) == {
+        "version": "2.1",
+        "timestamp": 1795243201531,
+    }
+
+
 @pytest.mark.asyncio
 async def test_resolve_reports_provider_access_denial_without_retrying():
     client = httpx.AsyncClient(
