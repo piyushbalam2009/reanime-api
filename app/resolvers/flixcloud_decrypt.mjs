@@ -71,7 +71,12 @@ async function main() {
     redirect: "error",
     signal: AbortSignal.timeout(15000),
   });
-  if (!response.ok) throw new Error("FlixCloud token metadata returned HTTP " + response.status);
+  if (!response.ok) {
+    // Include only a short provider error body for diagnosis; never log the token or URL.
+    const body = (await response.text()).replace(/[\\r\\n\\t]+/g, " ").slice(0, 240);
+    throw new Error("FlixCloud token metadata returned HTTP " + response.status +
+      (body ? " - " + body : ""));
+  }
   const tokenData = await response.json();
   const encryptedUrl = b64(tokenData[sha(token + "vid").slice(0, 10)]);
   const tokenBytes = b64(tokenData[sha(token + "key").slice(0, 10)]);
