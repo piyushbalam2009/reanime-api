@@ -20,6 +20,11 @@ def test_rejects_untrusted_or_invalid_embed_urls(url):
         FlixCloudResolver.validate_embed_url(url)
 
 
+def test_extract_video_id_accepts_unquoted_javascript_object_key():
+    html = '<script>const player = {video_id:"f4762abb-b524-4903-8dc1-68f82367e70b"};</script>'
+    assert FlixCloudResolver._extract_video_id(html) == "f4762abb-b524-4903-8dc1-68f82367e70b"
+
+
 @pytest.mark.asyncio
 async def test_resolve_extracts_video_id_and_fetches_metadata_without_exposing_opaque_fields():
     calls = []
