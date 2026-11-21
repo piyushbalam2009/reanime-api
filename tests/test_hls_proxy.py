@@ -72,7 +72,7 @@ def test_proxy_url_for_builds_api_url_for_hls_and_subtitle_resources():
 
 
 def test_decode_playlist_accepts_valid_hls_and_utf8_bom():
-    assert _decode_playlist(b"\xef\xbb\xbf #EXTM3U\n#EXTINF:5,\nsegment.ts\n", "application/octet-stream").startswith("\ufeff #EXTM3U")
+    assert _decode_playlist(b"\xef\xbb\xbf #EXTM3U\n#EXTINF:5,\nsegment.ts\n", "application/octet-stream").startswith(" #EXTM3U")
 
 
 @pytest.mark.parametrize(
