@@ -187,19 +187,20 @@ async def hls_proxy(
             except HTTPException as exc:
                 if isinstance(exc.detail, dict) and exc.detail.get("error") == "upstream_not_hls":
                     preview = raw_payload.decode("utf-8", errors="replace")
-                    preview = re.sub(r"https?://[^\\s\"'<>]+", "[URL REDACTED]", preview)
+                    # Never log URLs, query strings, cookies, or long opaque values.
+                    preview = re.sub(r"https?://[^\s\"'<>]+", "[URL REDACTED]", preview)
                     preview = re.sub(
-                        r"(?i)(token|authorization|cookie|signature|key|secret)(\\s*[:=]\\s*)[^,\\s\"'<>]+",
-                        r"\\1\\2[REDACTED]",
+                        r"(?i)(token|authorization|cookie|signature|key|secret)(\s*[:=]\s*)[^,\s\"'<>]+",
+                        r"\1\2[REDACTED]",
                         preview,
                     )
-                    preview = re.sub(r"[A-Za-z0-9_-]{40,}", "[LONG VALUE REDACTED]", preview)
+                    preview = re.sub(r"[A-Za-z0-9_-]{24,}", "[OPAQUE VALUE REDACTED]", preview)
 
                     print(
                         "[HLS UPSTREAM DIAGNOSTIC]",
                         {
                             "status": upstream.status_code,
-                            "content_type": content_type,
+                            "content_type": content_type[:120],
                             "bytes": len(raw_payload),
                             "preview": preview[:500],
                         },
