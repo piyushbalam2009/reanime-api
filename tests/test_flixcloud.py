@@ -5,9 +5,7 @@ from app.resolvers.flixcloud import FlixCloudResolveError, FlixCloudResolver
 
 
 def test_validate_embed_url_extracts_id():
-    assert FlixCloudResolver.validate_embed_url(
-        "https://flixcloud.cc/e/abc12345?v=2"
-    )[0] == "abc12345"
+    assert FlixCloudResolver.validate_embed_url("https://flixcloud.cc/e/abc12345?v=2")[0] == "abc12345"
 
 
 @pytest.mark.parametrize("url", [
@@ -20,64 +18,86 @@ def test_rejects_untrusted_or_invalid_embed_urls(url):
         FlixCloudResolver.validate_embed_url(url)
 
 
-def test_extract_video_id_accepts_unquoted_javascript_object_key():
+def test_extract_video_id_accepts_unquoted_key():
     html = '<script>const player = {video_id:"f4762abb-b524-4903-8dc1-68f82367e70b"};</script>'
     assert FlixCloudResolver._extract_video_id(html) == "f4762abb-b524-4903-8dc1-68f82367e70b"
 
 
-@pytest.mark.asyncio
-async def test_resolve_extracts_video_id_and_fetches_metadata_without_exposing_opaque_fields():
-    calls = []
-
-    def handler(request):
-        calls.append(request)
-        if request.url.path == "/e/abc12345":
-            return httpx.Response(
-                200,
-                text='<script>const player = {"video_id":"video987654321"};</script>',
-            )
-        if request.url.path == "/api/m3u8/video987654321":
-            return httpx.Response(200, json={
-                "version": "2.1",
-                "duration": 1420,
-                "obfuscated_crypto_data": "do-not-return",
-                "token": "secret-token",
-            })
-        return httpx.Response(404)
-
-    client = httpx.AsyncClient(transport=httpx.MockTransport(handler), follow_redirects=False)
-    resolver = FlixCloudResolver(client)
-    result = await resolver.resolve("https://flixcloud.cc/e/abc12345?v=2")
-
-    assert result["embed_id"] == "abc12345"
-    assert result["video_id"] == "video987654321"
-    assert result["status"] == "metadata_received"
-    assert result["playback_ready"] is False
-    assert result["metadata"] == {"version": "2.1", "duration": 1420}
-    assert calls[1].headers["referer"] == "https://flixcloud.cc/e/abc12345?v=2"
-    await client.aclose()
-
-
-def test_safe_metadata_reads_nested_metadata_and_omits_opaque_fields():
-    payload = {
-        "metadata": {"version": "2.1", "timestamp": 1795243201531},
-        "obfuscated_crypto_data": {"secret": "never-return"},
-        "token": "never-return",
-    }
-    assert FlixCloudResolver._safe_metadata(payload) == {
-        "version": "2.1",
-        "timestamp": 1795243201531,
-    }
+def test_safe_subtitles_filters_bad_urls():
+    tracks = [
+        {"url": "https://subs.flixcloud.cc/en.vtt", "language": "English", "format": "vtt", "default": True},
+        {"url": "javascript:alert(1)"},
+        {"url": "http://subs.example/sub.srt"},
+    ]
+    assert FlixCloudResolver._safe_subtitles(tracks) == [
+        {"url": "https://subs.flixcloud.cc/en.vtt", "language": "English", "format": "vtt", "default": True}
+    ]
 
 
 @pytest.mark.asyncio
-async def test_resolve_reports_provider_access_denial_without_retrying():
+async def test_resolve_returns_playable_url_and_tracks(monkeypatch):
     client = httpx.AsyncClient(
-        transport=httpx.MockTransport(lambda request: httpx.Response(403)),
-        follow_redirects=False,
+        transport=httpx.MockTransport(lambda request: httpx.Response(
+            200, text='<script>const player = {video_id:"video987654321"};</script>'
+        ))
     )
     resolver = FlixCloudResolver(client)
-    with pytest.raises(FlixCloudResolveError) as error:
-        await resolver.resolve("https://flixcloud.cc/e/abc12345")
-    assert error.value.status_code == 403
+    calls = []
+
+    async def fake_decryptor(html, embed_url):
+        calls.append(embed_url)
+        return {
+            "url": "https://fetch1.flixcloud.cc/_v8/example/master.m3u8?token=abc",
+            "video_id": "video987654321",
+            "subtitles": [{"url": "https://subs.flixcloud.cc/en.vtt", "language": "English"}],
+            "thumbnails_vtt": "https://fetch1.flixcloud.cc/thumbnails_vtt/example",
+            "video_title": "Episode 1",
+            "intro_chapter": None,
+            "outro_chapter": None,
+        }
+
+    monkeypatch.setattr(resolver, "_run_decryptor", fake_decryptor)
+    result = await resolver.resolve("https://flixcloud.cc/e/abc12345?v=2")
+    assert result["playback_ready"] is True
+    assert result["url"].startswith("https://fetch1.flixcloud.cc/")
+    assert result["video_id"] == "video987654321"
+    assert result["subtitles"][0]["language"] == "English"
+    assert calls == ["https://flixcloud.cc/e/abc12345?v=2"]
     await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_resolve_rejects_external_stream_domain(monkeypatch):
+    client = httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda request: httpx.Response(200, text="<html>embed</html>"))
+    )
+    resolver = FlixCloudResolver(client)
+
+    async def fake_decryptor(html, embed_url):
+        return {"url": "https://attacker.example/master.m3u8"}
+
+    monkeypatch.setattr(resolver, "_run_decryptor", fake_decryptor)
+    with pytest.raises(FlixCloudResolveError, match="outside its provider domain"):
+        await resolver.resolve("https://flixcloud.cc/e/abc12345")
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_decryptor_maps_http_410_without_retry(monkeypatch):
+    resolver = FlixCloudResolver()
+
+    class FakeProcess:
+        returncode = 1
+        async def communicate(self, data):
+            return b"", b"FlixCloud token metadata returned HTTP 410"
+
+    async def fake_process(*args, **kwargs):
+        return FakeProcess()
+
+    import app.resolvers.flixcloud as module
+    monkeypatch.setattr(module.shutil, "which", lambda _: "/usr/bin/node")
+    monkeypatch.setattr(module.Path, "is_file", lambda _: True)
+    monkeypatch.setattr(module.asyncio, "create_subprocess_exec", fake_process)
+    with pytest.raises(FlixCloudResolveError) as exc:
+        await resolver._run_decryptor("<html/>", "https://flixcloud.cc/e/abc12345")
+    assert exc.value.status_code == 410
