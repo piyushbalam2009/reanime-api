@@ -9,8 +9,8 @@ import httpx
 
 ALLOWED_EMBED_HOSTS = {"flixcloud.cc", "www.flixcloud.cc"}
 VIDEO_ID_PATTERNS = (
-    re.compile(r'["']video_id["']\s*:\s*["']([A-Za-z0-9_-]{8,128})["']', re.I),
-    re.compile(r'["']videoId["']\s*:\s*["']([A-Za-z0-9_-]{8,128})["']', re.I),
+    re.compile(r"""["']video_id["']\s*:\s*["']([A-Za-z0-9_-]{8,128})["']""", re.I),
+    re.compile(r"""["']videoId["']\s*:\s*["']([A-Za-z0-9_-]{8,128})["']""", re.I),
 )
 
 
