@@ -7,6 +7,8 @@ from starlette.requests import Request
 from app.hls_proxy import (
     _decode_playlist,
     _payload_kind,
+    _playlist_key_for_url,
+    store_playlist_key,
     proxy_url_for,
     rewrite_playlist,
     validate_upstream_url,
@@ -86,6 +88,33 @@ def test_decode_playlist_does_not_treat_base64_opaque_data_as_hls():
     with pytest.raises(HTTPException) as raised:
         _decode_playlist(opaque, "application/vnd.apple.mpegurl")
     assert raised.value.detail["error"] == "upstream_not_hls"
+
+
+def test_decode_playlist_decodes_flixcloud_base64_xor_envelope():
+    import base64
+
+    key = bytes(range(32))
+    manifest = b"#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=800000\nvideo-480p.m3u8\n"
+    encrypted = bytes(value ^ key[index % len(key)] for index, value in enumerate(manifest))
+    payload = base64.b64encode(encrypted)
+    assert _decode_playlist(payload, "application/vnd.apple.mpegurl", key) == manifest.decode()
+
+
+def test_playlist_key_is_stored_server_side_and_matched_to_video_path():
+    import base64
+
+    video_id = "f4762abb-b524-4903-8dc1-68f82367e70b"
+    key = bytes(range(32))
+    assert store_playlist_key(video_id, base64.b64encode(key).decode()) is True
+    target = f"https://fetch9.flixcloud.cc/_v7/{video_id}/video-480p.m3u8"
+    assert _playlist_key_for_url(target) == key
+    assert _playlist_key_for_url("https://fetch9.flixcloud.cc/other/master.m3u8") is None
+
+
+def test_playlist_key_rejects_invalid_length():
+    import base64
+
+    assert store_playlist_key("f4762abb-b524-4903-8dc1-68f82367e70b", base64.b64encode(b"short").decode()) is False
 
 
 def test_decode_playlist_accepts_valid_hls_and_utf8_bom():
