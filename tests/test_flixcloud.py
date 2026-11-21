@@ -69,6 +69,7 @@ async def test_resolve_uses_one_browser_session_and_returns_playable_url(monkeyp
         return {
             "url": "https://fetch1.flixcloud.cc/_v8/example/master.m3u8?token=abc",
             "video_id": "video987654321",
+            "playlist_key": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
             "subtitles": [{"url": "https://subs.flixcloud.cc/en.vtt", "language": "English"}],
             "thumbnails_vtt": "https://fetch1.flixcloud.cc/thumbnails_vtt/example",
             "video_title": "Episode 1",
@@ -81,6 +82,7 @@ async def test_resolve_uses_one_browser_session_and_returns_playable_url(monkeyp
     assert result["playback_ready"] is True
     assert result["url"].startswith("https://fetch1.flixcloud.cc/")
     assert result["video_id"] == "video987654321"
+    assert result["playlist_key"] == "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8="
     assert result["subtitles"][0]["language"] == "English"
     assert calls[0][0] == "https://flixcloud.cc/e/abc12345?v=2"
     assert calls[0][1].startswith("reanime-")
