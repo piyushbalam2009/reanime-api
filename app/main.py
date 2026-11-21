@@ -12,10 +12,12 @@ from redis.exceptions import RedisError
 from app.cache import get_json, set_json
 from app.config import settings
 from app.source import ReAnimeAdapter, SourceNotConfigured, SourceRequestError
+from app.resolvers.flixcloud import FlixCloudResolveError, FlixCloudResolver
 
 logging.basicConfig(level=getattr(logging, settings.log_level.upper(), logging.INFO))
 logger = logging.getLogger("reanime.api")
 adapter = ReAnimeAdapter()
+flixcloud_resolver = FlixCloudResolver()
 redis_client: Redis | None = None
 
 
@@ -23,6 +25,7 @@ redis_client: Redis | None = None
 async def lifespan(_: FastAPI):
     global redis_client
     await adapter.start()
+    await flixcloud_resolver.start()
     if settings.redis_url:
         try:
             client = Redis.from_url(settings.redis_url, decode_responses=True, socket_connect_timeout=3)
@@ -36,6 +39,7 @@ async def lifespan(_: FastAPI):
         await redis_client.aclose()
         redis_client = None
     await adapter.close()
+    await flixcloud_resolver.close()
 
 
 app = FastAPI(
@@ -110,6 +114,14 @@ async def source_error_handler(_: Request, exc: SourceRequestError):
     return JSONResponse(
         status_code=exc.status_code,
         content={"error": "source_request_failed", "message": str(exc)},
+    )
+
+
+@app.exception_handler(FlixCloudResolveError)
+async def flixcloud_error_handler(_: Request, exc: FlixCloudResolveError):
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"error": "flixcloud_resolve_failed", "message": str(exc)},
     )
 
 
@@ -194,3 +206,37 @@ async def servers(episode_id: str):
         return result
     except SourceNotConfigured as exc:
         raise source_not_ready(exc) from exc
+
+
+@app.get("/api/episode/{episode_id}/resolve")
+async def resolve_episode(
+    episode_id: str,
+    audio: str = Query("sub", pattern="^(sub|dub)$"),
+    server: str | None = Query(None, max_length=32),
+):
+    """Inspect a FlixCloud embed selected from the episode's server listing."""
+    listing = await adapter.servers(episode_id)
+    candidates = listing.get(audio) or []
+    selected = next(
+        (
+            item for item in candidates
+            if isinstance(item, dict)
+            and item.get("dataLink")
+            and (server is None or item.get("serverName") == server)
+        ),
+        None,
+    )
+    if selected is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No FlixCloud {audio} server was found for this episode and server selection.",
+        )
+
+    embed_url = selected.get("dataLink")
+    result = await flixcloud_resolver.resolve(embed_url)
+    return {
+        "episode_id": episode_id,
+        "audio": audio,
+        "server": selected.get("serverName"),
+        "playback": result,
+    }
