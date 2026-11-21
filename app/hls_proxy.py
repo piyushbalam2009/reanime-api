@@ -147,6 +147,9 @@ def _decode_playlist(payload: bytes, content_type: str, playlist_key: bytes | No
     try:
         body = payload.decode("utf-8-sig")
     except UnicodeDecodeError as exc:
+        decoded_flix = _decode_flixcloud_playlist(payload, playlist_key) if playlist_key else None
+        if decoded_flix is not None:
+            return decoded_flix
         raise HTTPException(
             status_code=502,
             detail={
