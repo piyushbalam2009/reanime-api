@@ -131,10 +131,12 @@ class FlixCloudResolver:
                 raise FlixCloudResolveError(
                     "FlixCloud rejected the one-time token (HTTP 410); no retry was attempted.", 410
                 )
-            if "HTTP 401" in message or "HTTP 403" in message:
-                raise FlixCloudResolveError("FlixCloud denied the playback token request", 403)
+            if "HTTP 401" in message:
+                raise FlixCloudResolveError("FlixCloud rejected the playback token request: " + message, 401)
+            if "HTTP 403" in message:
+                raise FlixCloudResolveError("FlixCloud forbade the playback token request: " + message, 403)
             if "HTTP 429" in message:
-                raise FlixCloudResolveError("FlixCloud rate-limited the playback token request", 429)
+                raise FlixCloudResolveError("FlixCloud rate-limited the playback token request: " + message, 429)
             raise FlixCloudResolveError("FlixCloud decryption failed: " + (message or "unknown error"))
         try:
             payload = json.loads(stdout)
