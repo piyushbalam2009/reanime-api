@@ -46,7 +46,12 @@ def validate_upstream_url(value: str) -> str:
 
     allowed = [item.strip().lower().lstrip(".") for item in settings.hls_proxy_allowed_hosts.split(",") if item.strip()]
     if not any(host == domain or host.endswith("." + domain) for domain in allowed):
-        raise HTTPException(status_code=403, detail="Upstream host is not allowlisted.")
+        # Expose only the hostname (never the signed URL, path, or query) to help
+        # operators configure the narrow provider/CDN allowlist safely.
+        raise HTTPException(
+            status_code=403,
+            detail={"error": "upstream_host_not_allowlisted", "host": host},
+        )
     return value
 
 
