@@ -1,3 +1,5 @@
+import json
+
 import httpx
 import pytest
 
@@ -34,18 +36,30 @@ def test_safe_subtitles_filters_bad_urls():
     ]
 
 
+def _flaresolverr_mock(html):
+    def handler(request):
+        payload = json.loads(request.content)
+        cmd = payload["cmd"]
+        if cmd in ("sessions.create", "sessions.destroy"):
+            return httpx.Response(200, json={"status": "ok", "message": "ok"})
+        if cmd == "request.get":
+            return httpx.Response(200, json={
+                "status": "ok",
+                "solution": {"status": 200, "response": html, "cookies": [], "userAgent": "test"},
+            })
+        return httpx.Response(400, json={"status": "error", "message": "unsupported"})
+    return handler
+
+
 @pytest.mark.asyncio
-async def test_resolve_returns_playable_url_and_tracks(monkeypatch):
-    client = httpx.AsyncClient(
-        transport=httpx.MockTransport(lambda request: httpx.Response(
-            200, text='<script>const player = {video_id:"video987654321"};</script>'
-        ))
-    )
+async def test_resolve_uses_one_browser_session_and_returns_playable_url(monkeypatch):
+    html = '<script>const player = {video_id:"video987654321"};</script>'
+    client = httpx.AsyncClient(transport=httpx.MockTransport(_flaresolverr_mock(html)))
     resolver = FlixCloudResolver(client)
     calls = []
 
-    async def fake_decryptor(html, embed_url):
-        calls.append(embed_url)
+    async def fake_decryptor(page_html, embed_url, session_id):
+        calls.append((embed_url, session_id))
         return {
             "url": "https://fetch1.flixcloud.cc/_v8/example/master.m3u8?token=abc",
             "video_id": "video987654321",
@@ -62,23 +76,33 @@ async def test_resolve_returns_playable_url_and_tracks(monkeypatch):
     assert result["url"].startswith("https://fetch1.flixcloud.cc/")
     assert result["video_id"] == "video987654321"
     assert result["subtitles"][0]["language"] == "English"
-    assert calls == ["https://flixcloud.cc/e/abc12345?v=2"]
+    assert calls[0][0] == "https://flixcloud.cc/e/abc12345?v=2"
+    assert calls[0][1].startswith("reanime-")
     await client.aclose()
 
 
 @pytest.mark.asyncio
 async def test_resolve_rejects_external_stream_domain(monkeypatch):
-    client = httpx.AsyncClient(
-        transport=httpx.MockTransport(lambda request: httpx.Response(200, text="<html>embed</html>"))
-    )
+    html = "<html>embed</html>"
+    client = httpx.AsyncClient(transport=httpx.MockTransport(_flaresolverr_mock(html)))
     resolver = FlixCloudResolver(client)
 
-    async def fake_decryptor(html, embed_url):
+    async def fake_decryptor(page_html, embed_url, session_id):
         return {"url": "https://attacker.example/master.m3u8"}
 
     monkeypatch.setattr(resolver, "_run_decryptor", fake_decryptor)
     with pytest.raises(FlixCloudResolveError, match="outside its provider domain"):
         await resolver.resolve("https://flixcloud.cc/e/abc12345")
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_flaresolverr_challenge_failure_is_reported():
+    challenge = '<html><title>Just a moment...</title><script src="https://challenges.cloudflare.com/x"></script></html>'
+    client = httpx.AsyncClient(transport=httpx.MockTransport(_flaresolverr_mock(challenge)))
+    resolver = FlixCloudResolver(client)
+    with pytest.raises(FlixCloudResolveError, match="could not complete"):
+        await resolver._flaresolverr_get("https://flixcloud.cc/e/abc12345", "reanime-" + "a" * 32)
     await client.aclose()
 
 
@@ -99,5 +123,7 @@ async def test_decryptor_maps_http_410_without_retry(monkeypatch):
     monkeypatch.setattr(module.Path, "is_file", lambda _: True)
     monkeypatch.setattr(module.asyncio, "create_subprocess_exec", fake_process)
     with pytest.raises(FlixCloudResolveError) as exc:
-        await resolver._run_decryptor("<html/>", "https://flixcloud.cc/e/abc12345")
+        await resolver._run_decryptor(
+            "<html/>", "https://flixcloud.cc/e/abc12345", "reanime-" + "a" * 32
+        )
     assert exc.value.status_code == 410
