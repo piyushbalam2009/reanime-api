@@ -68,8 +68,38 @@ async function requestTokenMetadata(flaresolverrUrl, sessionId, embedUrl, token)
   try {
     return JSON.parse(body);
   } catch {
+    // Chromium/FlareSolverr can wrap a JSON response in an HTML document
+    // with the original response text inside a <pre> element.
+    const preMatch = body.match(/<pre\\b[^>]*>([\\s\\S]*?)<\\/pre>/i);
+    if (preMatch) {
+      const extracted = preMatch[1]
+        .replace(/&quot;/gi, '"')
+        .replace(/&#39;|&apos;/gi, "'")
+        .replace(/&lt;/gi, "<")
+        .replace(/&gt;/gi, ">")
+        .replace(/&amp;/gi, "&")
+        .trim();
+      try {
+        return JSON.parse(extracted);
+      } catch {
+        // Keep going: some wrappers do not use <pre>.
+      }
+    }
+
+    // Also handle a plain JSON object embedded directly in an HTML body.
+    const jsonStart = body.indexOf("{");
+    const jsonEnd = body.lastIndexOf("}");
+    if (jsonStart !== -1 && jsonEnd > jsonStart) {
+      const extracted = body.slice(jsonStart, jsonEnd + 1).trim();
+      try {
+        return JSON.parse(extracted);
+      } catch {
+        // Preserve the diagnostic below; do not alter encoded field values.
+      }
+    }
+
     const normalized = body.replace(/[\\r\\n\\t]+/g, " ").replaceAll(token, "[redacted]");
-    const preview = normalized.slice(0, 180);
+    const preview = normalized.slice(0, 1000);
     if (/just a moment|cf-mitigated|challenges\\.cloudflare\\.com/i.test(body)) {
       throw new Error("FlareSolverr returned a Cloudflare challenge page for token metadata (HTTP " + status + ")");
     }
@@ -140,6 +170,6 @@ async function main() {
   }));
 }
 main().catch((e) => {
-  process.stderr.write(String(e?.message ?? e).slice(0, 300) + "\n");
+  process.stderr.write(String(e?.message ?? e).slice(0, 1200) + "\n");
   process.exit(1);
 });
