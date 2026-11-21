@@ -10,13 +10,13 @@ A Python/FastAPI wrapper for Re:ANIME's catalog and episode server-list interfac
 
 ## Setup
 
-\`\`\`bash
+```bash
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env
 uvicorn app.main:app --reload
-\`\`\`
+```
 
 ## API routes
 
@@ -40,11 +40,11 @@ The response includes playback.url, playback.subtitles, playback.thumbnails_vtt,
 
 ## Verification
 
-\`\`\`bash
+```bash
 PYTHONPATH=. pytest -q
 python -m compileall -q app api tests
 node --check app/resolvers/flixcloud_decrypt.mjs
-\`\`\`
+```
 
 ## Deployment
 
