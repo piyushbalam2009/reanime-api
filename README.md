@@ -36,7 +36,7 @@ A Python/FastAPI wrapper for Re:ANIME's catalog and episode server-list interfac
 
 FlixCloud embed and one-time token requests use a dedicated FlareSolverr browser session. The embed page and token metadata request share the same session; the session is destroyed after each resolution. The one-time token request is made exactly once and is never retried. The existing WASM/AES decryption extracts the provider's HLS URL and subtitle tracks.
 
-The HLS proxy accepts HTTPS URLs only from configured provider/CDN hostnames. It rewrites child playlist, segment, key, and subtitle references to pass through the same proxy endpoint. It forwards byte-range requests and streams media responses rather than buffering entire segments. Redirects are rejected to prevent an allowlisted URL from redirecting the proxy to an untrusted host.
+The resolve endpoint now returns a proxy URL in playback.url and rewrites the returned subtitle and thumbnail URLs through the same proxy. The HLS proxy accepts HTTPS URLs only from configured provider/CDN hostnames. It rewrites child playlist, segment, key, and subtitle references to pass through the same proxy endpoint. It forwards byte-range requests and streams media responses rather than buffering entire segments. Redirects are rejected to prevent an allowlisted URL from redirecting the proxy to an untrusted host.
 
 Configure allowed upstream hostnames in .env if the provider uses additional CDN domains:
 
