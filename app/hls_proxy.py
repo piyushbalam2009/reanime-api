@@ -1,3 +1,5 @@
+import base64
+import binascii
 import ipaddress
 import re
 from urllib.parse import urljoin, urlsplit, urlencode
@@ -95,11 +97,22 @@ def _decode_playlist(payload: bytes, content_type: str) -> str:
         ) from exc
 
     if not body.lstrip(" \t\r\n").startswith("#EXTM3U"):
+        # Accept Base64 only when it decodes into a recognizable HLS manifest.
+        # Opaque/encrypted provider payloads are deliberately not guessed at.
+        compact = "".join(body.split())
+        if compact and len(compact) <= (_MAX_PLAYLIST_BYTES * 2):
+            try:
+                decoded = base64.b64decode(compact, validate=True).decode("utf-8-sig")
+            except (binascii.Error, UnicodeDecodeError, ValueError):
+                decoded = ""
+            if decoded.lstrip(" \t\r\n").startswith("#EXTM3U"):
+                return decoded
+
         raise HTTPException(
             status_code=502,
             detail={
                 "error": "upstream_not_hls",
-                "message": "The upstream labeled this response as a playlist, but its body did not begin with #EXTM3U.",
+                "message": "The upstream response was not a recognizable HLS playlist.",
                 "upstream_content_type": content_type[:120],
                 "upstream_bytes": len(payload),
                 "upstream_body_kind": _payload_kind(payload),
