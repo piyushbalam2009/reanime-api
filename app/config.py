@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     source_access_mode: str = "direct"
     flixcloud_flaresolverr_url: str = "http://127.0.0.1:8191"
     flixcloud_flaresolverr_timeout_seconds: int = 60000
+    hls_proxy_allowed_hosts: str = "flixcloud.cc,forestcdn.top"
 
     @property
     def cors(self) -> list[str]:
