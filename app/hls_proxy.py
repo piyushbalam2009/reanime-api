@@ -73,6 +73,8 @@ def _decode_flixcloud_playlist(payload: bytes, key: bytes) -> str | None:
         return body if body.startswith("#EXTM3U") else None
     except (UnicodeDecodeError, binascii.Error, ValueError):
         return None
+
+
 _FORWARD_REQUEST_HEADERS = {"range", "if-range"}
 _FORWARD_RESPONSE_HEADERS = {
     "accept-ranges", "cache-control", "content-length", "content-encoding",
@@ -158,7 +160,7 @@ def _decode_playlist(payload: bytes, content_type: str, playlist_key: bytes | No
 
     if not body.lstrip(" \t\r\n").startswith("#EXTM3U"):
         # Accept Base64 only when it decodes into a recognizable HLS manifest.
-        # Opaque/encrypted provider payloads are deliberately not guessed at.
+        # FlixCloud XOR decoding is attempted below only when its server-side key exists.
         compact = "".join(body.split())
         if compact and len(compact) <= (_MAX_PLAYLIST_BYTES * 2):
             try:
