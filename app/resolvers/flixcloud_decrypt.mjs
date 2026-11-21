@@ -145,7 +145,7 @@ async function main() {
   }
 
   const { instance } = await WebAssembly.instantiate(b64(data.w_payload));
-  const { _s, _r, memory } = instance.exports;
+  const { _s, _r, _c, memory } = instance.exports;
   if (typeof _s !== "function" || typeof _r !== "function" || !memory) throw new Error("Unexpected WASM exports");
   const heap = new Uint8Array(memory.buffer), n = fragment1.length;
   const [a, b, c, out] = [1000, 1000 + n, 1000 + 2*n, 1000 + 3*n];
@@ -155,6 +155,17 @@ async function main() {
   _r(a, b, c, out, n);
   const wasmOutput = Buffer.from(heap.subarray(out, out + n));
 
+  // ReAnime's FlixCloud implementation exposes the playlist XOR key through
+  // the WASM _c() export. Keep it in the resolver response only; the API
+  // stores it server-side and never returns it to playback clients.
+  let playlistKey = null;
+  if (typeof _c === "function") {
+    const ptr = Number(_c());
+    if (Number.isSafeInteger(ptr) && ptr >= 0 && ptr + 32 <= memory.buffer.byteLength) {
+      playlistKey = Buffer.from(new Uint8Array(memory.buffer).subarray(ptr, ptr + 32)).toString("base64");
+    }
+  }
+
   const keyMaterial = crypto.pbkdf2Sync(wasmOutput, seed, 1000, 32, "sha256");
   for (let i = 0; i < 32; i++) keyMaterial[i] ^= seed.charCodeAt(i % seed.length);
   const aesKey = crypto.createHash("sha256").update(keyMaterial).digest();
@@ -163,7 +174,7 @@ async function main() {
   if (!url.startsWith("https://")) throw new Error("Decrypted stream URL is not HTTPS");
 
   process.stdout.write(JSON.stringify({
-    url, subtitles: Array.isArray(data.subtitles) ? data.subtitles : [],
+    url, playlist_key: playlistKey, subtitles: Array.isArray(data.subtitles) ? data.subtitles : [],
     thumbnails_vtt: data.thumbnails_vtt ?? null, video_title: data.video_title ?? null,
     intro_chapter: data.intro_chapter ?? null, outro_chapter: data.outro_chapter ?? null,
     video_id: data.video_id ?? null,
