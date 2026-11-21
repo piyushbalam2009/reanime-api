@@ -71,6 +71,23 @@ def test_proxy_url_for_builds_api_url_for_hls_and_subtitle_resources():
     assert parse_qs(parsed.query)["url"] == [target]
 
 
+def test_decode_playlist_accepts_base64_wrapped_plain_hls():
+    import base64
+
+    manifest = b"#EXTM3U\n#EXTINF:5,\nsegment.ts\n"
+    wrapped = base64.b64encode(manifest)
+    assert _decode_playlist(wrapped, "application/vnd.apple.mpegurl") == manifest.decode()
+
+
+def test_decode_playlist_does_not_treat_base64_opaque_data_as_hls():
+    import base64
+
+    opaque = base64.b64encode(b"not a playlist")
+    with pytest.raises(HTTPException) as raised:
+        _decode_playlist(opaque, "application/vnd.apple.mpegurl")
+    assert raised.value.detail["error"] == "upstream_not_hls"
+
+
 def test_decode_playlist_accepts_valid_hls_and_utf8_bom():
     assert _decode_playlist(b"\xef\xbb\xbf #EXTM3U\n#EXTINF:5,\nsegment.ts\n", "application/octet-stream").startswith(" #EXTM3U")
 
