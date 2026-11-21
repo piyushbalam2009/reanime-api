@@ -10,6 +10,7 @@ from app.config import settings
 
 _URI_ATTRIBUTE = re.compile(r'URI="([^"]+)"', re.IGNORECASE)
 _TIMEOUT = httpx.Timeout(45.0, connect=10.0)
+_MAX_PLAYLIST_BYTES = 2 * 1024 * 1024
 _FORWARD_REQUEST_HEADERS = {"range", "if-range"}
 _FORWARD_RESPONSE_HEADERS = {
     "accept-ranges", "cache-control", "content-length", "content-encoding",
@@ -56,6 +57,52 @@ def proxy_url_for(request: Request, target: str) -> str:
     return f"{endpoint}?{urlencode({'url': target})}"
 
 
+def _payload_kind(payload: bytes) -> str:
+    """Return a safe diagnostic classification without exposing response contents."""
+    sample = payload.lstrip(b"\xef\xbb\xbf \t\r\n").lower()
+    if sample.startswith(b"#extm3u"):
+        return "hls"
+    if sample.startswith((b"<!doctype html", b"<html", b"<head", b"<body")):
+        return "html"
+    if sample.startswith((b"{", b"[")):
+        return "json"
+    try:
+        payload.decode("utf-8")
+    except UnicodeDecodeError:
+        return "binary_or_encoded"
+    return "text"
+
+
+def _decode_playlist(payload: bytes, content_type: str) -> str:
+    """Reject mislabeled/opaque payloads instead of rewriting them as playlists."""
+    try:
+        body = payload.decode("utf-8-sig")
+    except UnicodeDecodeError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "error": "upstream_not_hls",
+                "message": "The upstream response was not a UTF-8 HLS playlist.",
+                "upstream_content_type": content_type[:120],
+                "upstream_bytes": len(payload),
+                "upstream_body_kind": _payload_kind(payload),
+            },
+        ) from exc
+
+    if not body.lstrip(" \t\r\n").startswith("#EXTM3U"):
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "error": "upstream_not_hls",
+                "message": "The upstream labeled this response as a playlist, but its body did not begin with #EXTM3U.",
+                "upstream_content_type": content_type[:120],
+                "upstream_bytes": len(payload),
+                "upstream_body_kind": _payload_kind(payload),
+            },
+        )
+    return body
+
+
 def rewrite_playlist(body: str, base_url: str, request: Request) -> str:
     """Rewrite both URI lines and URI= attributes in an HLS playlist."""
     output: list[str] = []
@@ -79,7 +126,7 @@ async def hls_proxy(
     request: Request,
     url: str = Query(..., min_length=12, max_length=4096),
 ):
-    """Proxy one HLS resource; playlists are rewritten to proxy every child URI."""
+    """Proxy one HLS resource; validate and rewrite playlists before returning them."""
     target = validate_upstream_url(url)
     headers = {
         "User-Agent": request.headers.get(
@@ -116,11 +163,23 @@ async def hls_proxy(
 
     if is_playlist:
         try:
-            payload = (await upstream.aread()).decode("utf-8-sig")
-            rewritten = rewrite_playlist(payload, target, request)
+            payload = bytearray()
+            async for chunk in upstream.aiter_bytes():
+                payload.extend(chunk)
+                if len(payload) > _MAX_PLAYLIST_BYTES:
+                    raise HTTPException(
+                        status_code=502,
+                        detail={
+                            "error": "upstream_playlist_too_large",
+                            "message": "The upstream playlist exceeded the configured size limit.",
+                            "max_bytes": _MAX_PLAYLIST_BYTES,
+                        },
+                    )
+            body = _decode_playlist(bytes(payload), content_type)
+            rewritten = rewrite_playlist(body, target, request)
         except HTTPException:
             raise
-        except (UnicodeDecodeError, httpx.HTTPError) as exc:
+        except (httpx.HTTPError, UnicodeDecodeError) as exc:
             raise HTTPException(status_code=502, detail="The upstream playlist could not be read.") from exc
         finally:
             await upstream.aclose()
