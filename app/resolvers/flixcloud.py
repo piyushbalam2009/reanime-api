@@ -284,6 +284,8 @@ class FlixCloudResolver:
             "status": "playback_ready",
             "playback_ready": True,
             "url": stream_url,
+            # Internal-only value consumed by the API route; never serialize it.
+            "playlist_key": data.get("playlist_key") if isinstance(data.get("playlist_key"), str) else None,
             "subtitles": self._safe_subtitles(data.get("subtitles")),
             "thumbnails_vtt": self._safe_https_url(data.get("thumbnails_vtt")),
             "video_title": data.get("video_title") if isinstance(data.get("video_title"), str) else None,
