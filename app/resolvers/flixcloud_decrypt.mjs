@@ -84,7 +84,7 @@ async function main() {
   const flaresolverrUrl = process.argv[4] || "";
   if (!/^https:\/\/(www\.)?flixcloud\.cc\/e\//.test(embedUrl)) throw new Error("Invalid embed URL");
   if (!/^reanime-[a-f0-9]{32}$/.test(sessionId)) throw new Error("Invalid browser session identifier");
-  if (!/^https?:\/\/(localhost|127\.0\.0\.1)(:\\d+)?$/.test(flaresolverrUrl)) {
+  if (!/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(flaresolverrUrl)) {
     throw new Error("FlareSolverr must be configured on localhost");
   }
 
