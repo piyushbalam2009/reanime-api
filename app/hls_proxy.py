@@ -49,9 +49,11 @@ def validate_upstream_url(value: str) -> str:
     return value
 
 
-def _proxy_uri(request: Request, target: str) -> str:
+def proxy_url_for(request: Request, target: str) -> str:
+    """Build this API's proxy URL for an allowlisted upstream resource."""
     validate_upstream_url(target)
-    return f"{request.url_for('hls_proxy')}?{urlencode({'url': target})}"
+    endpoint = request.url.replace(path="/api/proxy/hls", query="")
+    return f"{endpoint}?{urlencode({'url': target})}"
 
 
 def rewrite_playlist(body: str, base_url: str, request: Request) -> str:
@@ -64,7 +66,7 @@ def rewrite_playlist(body: str, base_url: str, request: Request) -> str:
         elif line.startswith("#"):
             output.append(
                 _URI_ATTRIBUTE.sub(
-                    lambda match: f'URI="{_proxy_uri(request, urljoin(base_url, match.group(1)))}"',
+                    lambda match: f'URI="{proxy_url_for(request, urljoin(base_url, match.group(1)))}"',
                     raw_line,
                 )
             )
