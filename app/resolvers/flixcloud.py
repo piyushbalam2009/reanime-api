@@ -77,10 +77,19 @@ class FlixCloudResolver:
     def _safe_metadata(payload: Any) -> dict[str, Any]:
         if not isinstance(payload, dict):
             return {}
+        # FlixCloud's observed response nests descriptive metadata under
+        # "metadata"; retain compatibility with flat response variants too.
+        nested = payload.get("metadata")
+        descriptive = nested if isinstance(nested, dict) else {}
         # Only expose non-secret descriptive fields. Opaque crypto/config blobs,
         # tokens, signed URLs, and raw provider payloads are intentionally omitted.
-        allowed = ("version", "metadata_version", "duration", "title", "status")
-        return {key: payload[key] for key in allowed if isinstance(payload.get(key), (str, int, float, bool))}
+        allowed = ("version", "metadata_version", "duration", "title", "status", "timestamp")
+        return {
+            key: source[key]
+            for key in allowed
+            for source in (descriptive, payload)
+            if isinstance(source.get(key), (str, int, float, bool))
+        }
 
     async def resolve(self, embed_url: str) -> dict[str, Any]:
         embed_id, canonical_url = self.validate_embed_url(embed_url)
