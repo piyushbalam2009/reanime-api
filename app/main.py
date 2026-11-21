@@ -13,6 +13,7 @@ from app.cache import get_json, set_json
 from app.config import settings
 from app.source import ReAnimeAdapter, SourceNotConfigured, SourceRequestError
 from app.resolvers.flixcloud import FlixCloudResolveError, FlixCloudResolver
+from app.hls_proxy import hls_proxy
 
 logging.basicConfig(level=getattr(logging, settings.log_level.upper(), logging.INFO))
 logger = logging.getLogger("reanime.api")
@@ -134,6 +135,11 @@ def source_not_ready(exc: SourceNotConfigured) -> HTTPException:
             "next_step": "Verify the site's actual public interface and permitted integration method.",
         },
     )
+
+
+@app.get("/api/proxy/hls", name="hls_proxy")
+async def proxy_hls(request: Request, url: str = Query(..., min_length=12, max_length=4096)):
+    return await hls_proxy(request, url)
 
 
 @app.get("/api/search")
