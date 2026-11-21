@@ -1,6 +1,6 @@
 # ReAnime API
 
-A Python/FastAPI wrapper for Re:ANIME's catalog and episode server-list interfaces, with FlixCloud playback resolution.
+A Python/FastAPI wrapper for Re:ANIME's catalog and episode server-list interfaces, with FlixCloud playback resolution and an HLS proxy.
 
 ## Requirements
 
@@ -29,11 +29,18 @@ A Python/FastAPI wrapper for Re:ANIME's catalog and episode server-list interfac
 | GET | /api/anime/{anime_id}/episodes | Episode list |
 | GET | /api/episode/{anime_id}:{episode}/servers | Episode server listings |
 | GET | /api/episode/{episode_id}/resolve?audio=sub&server=HD-2 | Resolve selected FlixCloud embed to HLS + subtitles |
+| GET | /api/proxy/hls?url={encoded_upstream_url} | Proxy an HLS playlist, segment, key, or subtitle resource |
 | GET | /api/anime/{anime_id}/server?episode=1 | Compatibility server-list route |
 
-## FlixCloud playback
+## FlixCloud playback and HLS proxy
 
-FlixCloud embed and one-time token requests use a dedicated FlareSolverr browser session. The embed page and token metadata request share the same session; the session is destroyed after each resolution. The one-time token request is made exactly once and is never retried. The existing WASM/AES decryption then extracts the HLS URL and subtitle tracks.
+FlixCloud embed and one-time token requests use a dedicated FlareSolverr browser session. The embed page and token metadata request share the same session; the session is destroyed after each resolution. The one-time token request is made exactly once and is never retried. The existing WASM/AES decryption extracts the provider's HLS URL and subtitle tracks.
+
+The HLS proxy accepts HTTPS URLs only from configured provider/CDN hostnames. It rewrites child playlist, segment, key, and subtitle references to pass through the same proxy endpoint. It forwards byte-range requests and streams media responses rather than buffering entire segments. Redirects are rejected to prevent an allowlisted URL from redirecting the proxy to an untrusted host.
+
+Configure allowed upstream hostnames in .env if the provider uses additional CDN domains:
+
+    HLS_PROXY_ALLOWED_HOSTS=flixcloud.cc,forestcdn.top
 
 Run FlareSolverr locally and do not expose its port publicly:
 
@@ -49,7 +56,7 @@ Set these values in .env:
     FLIXCLOUD_FLARESOLVERR_URL=http://127.0.0.1:8191
     FLIXCLOUD_FLARESOLVERR_TIMEOUT_SECONDS=60000
 
-Node.js 20+ must be available to the PM2 process. Do not cache one-time tokens or resolved stream URLs. This resolver returns the provider's HLS URL directly; it does not implement an HLS proxy.
+Node.js 20+ must be available to the PM2 process. Do not cache one-time tokens or resolved stream URLs.
 
 ## Verification
 
