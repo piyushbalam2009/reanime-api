@@ -39,15 +39,55 @@ function extractData(html) {
   }
   throw new Error("FlixCloud SSR data block incomplete");
 }
+async function requestTokenMetadata(flaresolverrUrl, sessionId, embedUrl, token) {
+  const tokenUrl = "https://flixcloud.cc/api/m3u8/" + encodeURIComponent(token);
+  const response = await fetch(flaresolverrUrl + "/v1", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Accept": "application/json" },
+    body: JSON.stringify({
+      cmd: "request.get",
+      url: tokenUrl,
+      session: sessionId,
+      maxTimeout: 60000,
+      headers: { "Accept": "application/json", "Referer": embedUrl },
+    }),
+    signal: AbortSignal.timeout(65000),
+  });
+  if (!response.ok) throw new Error("FlareSolverr token request returned HTTP " + response.status);
+  const result = await response.json();
+  if (result?.status !== "ok" || !result?.solution) {
+    throw new Error("FlareSolverr could not complete the playback token request");
+  }
+  const status = result.solution.status;
+  if (status !== 200 && status !== 201) {
+    throw new Error("FlixCloud token metadata returned HTTP " + String(status || "unknown"));
+  }
+  const body = result.solution.response;
+  if (typeof body !== "string" || !body) throw new Error("FlixCloud token metadata response was empty");
+  if (body.length > 1000000) throw new Error("FlixCloud token metadata response was too large");
+  try {
+    return JSON.parse(body);
+  } catch {
+    if (body.toLowerCase().includes("just a moment")) {
+      throw new Error("FlareSolverr could not complete the Cloudflare challenge for token metadata");
+    }
+    throw new Error("FlixCloud token metadata was not valid JSON");
+  }
+}
 async function main() {
   const chunks = [];
   for await (const c of process.stdin) chunks.push(c);
   const html = Buffer.concat(chunks).toString("utf8");
   if (!html || html.length > 5_000_000) throw new Error("Embed HTML empty or too large");
   const embedUrl = process.argv[2] || "";
+  const sessionId = process.argv[3] || "";
+  const flaresolverrUrl = process.argv[4] || "";
   if (!/^https:\/\/(www\.)?flixcloud\.cc\/e\//.test(embedUrl)) throw new Error("Invalid embed URL");
+  if (!/^reanime-[a-f0-9]{32}$/.test(sessionId)) throw new Error("Invalid browser session identifier");
+  if (!/^https?:\/\/(localhost|127\.0\.0\.1)(:\\d+)?$/.test(flaresolverrUrl)) {
+    throw new Error("FlareSolverr must be configured on localhost");
+  }
 
-  // Parse only the SSR data literal; do not execute the surrounding page scripts.
   const data = vm.runInNewContext("(" + extractData(html) + ")", Object.create(null), {
     timeout: 1000, codeGeneration: { strings: false, wasm: false },
   });
@@ -61,23 +101,8 @@ async function main() {
   const token = data[f.token];
   if (!token || typeof token !== "string" || !data.w_payload) throw new Error("One-time token or WASM payload missing");
 
-  // This is a one-time token endpoint. Exactly one request; never retry.
-  const response = await fetch("https://flixcloud.cc/api/m3u8/" + encodeURIComponent(token), {
-    headers: {
-      "User-Agent": "Mozilla/5.0 (compatible; ReAnimeAPI/0.1)",
-      "Accept": "application/json",
-      "Referer": embedUrl,
-    },
-    redirect: "error",
-    signal: AbortSignal.timeout(15000),
-  });
-  if (!response.ok) {
-    // Include only a short provider error body for diagnosis; never log the token or URL.
-    const body = (await response.text()).replace(/[\\r\\n\\t]+/g, " ").slice(0, 240);
-    throw new Error("FlixCloud token metadata returned HTTP " + response.status +
-      (body ? " - " + body : ""));
-  }
-  const tokenData = await response.json();
+  // One-time token request: exactly once, using the same authorized browser session.
+  const tokenData = await requestTokenMetadata(flaresolverrUrl, sessionId, embedUrl, token);
   const encryptedUrl = b64(tokenData[sha(token + "vid").slice(0, 10)]);
   const tokenBytes = b64(tokenData[sha(token + "key").slice(0, 10)]);
   if (!fragment1.length || !iv.length || !encryptedUrl.length || !tokenBytes.length) {
@@ -110,6 +135,6 @@ async function main() {
   }));
 }
 main().catch((e) => {
-  process.stderr.write(String(e?.message ?? e).slice(0, 400) + "\n");
+  process.stderr.write(String(e?.message ?? e).slice(0, 300) + "\n");
   process.exit(1);
 });
