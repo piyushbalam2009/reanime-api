@@ -14,6 +14,8 @@ class Settings(BaseSettings):
     source_base_url: str = "https://reanime.cz"
     source_timeout_seconds: float = 20.0
     source_access_mode: str = "direct"
+    flixcloud_flaresolverr_url: str = "http://127.0.0.1:8191"
+    flixcloud_flaresolverr_timeout_seconds: int = 60000
 
     @property
     def cors(self) -> list[str]:
