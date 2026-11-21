@@ -2,6 +2,7 @@ import base64
 import binascii
 import ipaddress
 import re
+import time
 from urllib.parse import urljoin, urlsplit, urlencode
 
 import httpx
@@ -13,6 +14,65 @@ from app.config import settings
 _URI_ATTRIBUTE = re.compile(r'URI="([^"]+)"', re.IGNORECASE)
 _TIMEOUT = httpx.Timeout(45.0, connect=10.0)
 _MAX_PLAYLIST_BYTES = 2 * 1024 * 1024
+
+_PLAYLIST_KEY_TTL_SECONDS = 30 * 60
+_MAX_CACHED_PLAYLIST_KEYS = 256
+_PLAYLIST_KEYS: dict[str, tuple[float, bytes]] = {}
+
+
+def store_playlist_key(video_id: str, encoded_key: str | None) -> bool:
+    """Keep a FlixCloud playlist key in process memory; never expose it in URLs."""
+    if not isinstance(video_id, str) or not re.fullmatch(r"[A-Za-z0-9-]{8,128}", video_id):
+        return False
+    if not isinstance(encoded_key, str) or len(encoded_key) > 128:
+        return False
+    try:
+        key = base64.b64decode(encoded_key, validate=True)
+    except (binascii.Error, ValueError):
+        return False
+    if len(key) != 32:
+        return False
+
+    now = time.monotonic()
+    expired = [item for item, (expires, _) in _PLAYLIST_KEYS.items() if expires <= now]
+    for item in expired:
+        _PLAYLIST_KEYS.pop(item, None)
+    if len(_PLAYLIST_KEYS) >= _MAX_CACHED_PLAYLIST_KEYS and video_id not in _PLAYLIST_KEYS:
+        oldest = min(_PLAYLIST_KEYS, key=lambda item: _PLAYLIST_KEYS[item][0])
+        _PLAYLIST_KEYS.pop(oldest, None)
+    _PLAYLIST_KEYS[video_id] = (now + _PLAYLIST_KEY_TTL_SECONDS, key)
+    return True
+
+
+def _playlist_key_for_url(target: str) -> bytes | None:
+    path = urlsplit(target).path
+    match = re.search(r"/_v\d+/([A-Za-z0-9-]{8,128})/", path)
+    if not match:
+        return None
+    entry = _PLAYLIST_KEYS.get(match.group(1))
+    if not entry:
+        return None
+    expires, key = entry
+    if expires <= time.monotonic():
+        _PLAYLIST_KEYS.pop(match.group(1), None)
+        return None
+    return key
+
+
+def _decode_flixcloud_playlist(payload: bytes, key: bytes) -> str | None:
+    """Decode the provider playlist envelope using its Base64/XOR format."""
+    try:
+        encoded = payload.decode("utf-8-sig").strip()
+        if not encoded or len(encoded) > (_MAX_PLAYLIST_BYTES * 2):
+            return None
+        encrypted = base64.b64decode(encoded, validate=True)
+        if not encrypted:
+            return None
+        decoded = bytes(value ^ key[index % len(key)] for index, value in enumerate(encrypted))
+        body = decoded.decode("utf-8-sig")
+        return body if body.startswith("#EXTM3U") else None
+    except (UnicodeDecodeError, binascii.Error, ValueError):
+        return None
 _FORWARD_REQUEST_HEADERS = {"range", "if-range"}
 _FORWARD_RESPONSE_HEADERS = {
     "accept-ranges", "cache-control", "content-length", "content-encoding",
@@ -80,7 +140,7 @@ def _payload_kind(payload: bytes) -> str:
     return "text"
 
 
-def _decode_playlist(payload: bytes, content_type: str) -> str:
+def _decode_playlist(payload: bytes, content_type: str, playlist_key: bytes | None = None) -> str:
     """Reject mislabeled/opaque payloads instead of rewriting them as playlists."""
     try:
         body = payload.decode("utf-8-sig")
@@ -107,6 +167,11 @@ def _decode_playlist(payload: bytes, content_type: str) -> str:
                 decoded = ""
             if decoded.lstrip(" \t\r\n").startswith("#EXTM3U"):
                 return decoded
+
+        if playlist_key:
+            decoded_flix = _decode_flixcloud_playlist(payload, playlist_key)
+            if decoded_flix is not None:
+                return decoded_flix
 
         raise HTTPException(
             status_code=502,
@@ -196,7 +261,7 @@ async def hls_proxy(
             raw_payload = bytes(payload)
 
             try:
-                body = _decode_playlist(raw_payload, content_type)
+                body = _decode_playlist(raw_payload, content_type, _playlist_key_for_url(target))
             except HTTPException as exc:
                 if isinstance(exc.detail, dict) and exc.detail.get("error") == "upstream_not_hls":
                     preview = raw_payload.decode("utf-8", errors="replace")
