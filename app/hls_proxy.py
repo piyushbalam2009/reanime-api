@@ -180,7 +180,32 @@ async def hls_proxy(
                             "max_bytes": _MAX_PLAYLIST_BYTES,
                         },
                     )
-            body = _decode_playlist(bytes(payload), content_type)
+            raw_payload = bytes(payload)
+
+            try:
+                body = _decode_playlist(raw_payload, content_type)
+            except HTTPException as exc:
+                if isinstance(exc.detail, dict) and exc.detail.get("error") == "upstream_not_hls":
+                    preview = raw_payload.decode("utf-8", errors="replace")
+                    preview = re.sub(r"https?://[^\\s\"'<>]+", "[URL REDACTED]", preview)
+                    preview = re.sub(
+                        r"(?i)(token|authorization|cookie|signature|key|secret)(\\s*[:=]\\s*)[^,\\s\"'<>]+",
+                        r"\\1\\2[REDACTED]",
+                        preview,
+                    )
+                    preview = re.sub(r"[A-Za-z0-9_-]{40,}", "[LONG VALUE REDACTED]", preview)
+
+                    print(
+                        "[HLS UPSTREAM DIAGNOSTIC]",
+                        {
+                            "status": upstream.status_code,
+                            "content_type": content_type,
+                            "bytes": len(raw_payload),
+                            "preview": preview[:500],
+                        },
+                        flush=True,
+                    )
+                raise
             rewritten = rewrite_playlist(body, target, request)
         except HTTPException:
             raise
