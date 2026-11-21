@@ -142,35 +142,77 @@ class FlixCloudResolver:
         except FlixCloudResolveError:
             pass
 
-    async def _flaresolverr_get(self, url: str, session_id: str, referer: str | None = None) -> str:
-        headers = {"Accept": "text/html,application/json,*/*"}
-        if referer:
-            headers["Referer"] = referer
-        result = await self._flaresolverr_post({
-            "cmd": "request.get",
-            "url": url,
-            "session": session_id,
-            "maxTimeout": settings.flixcloud_flaresolverr_timeout_seconds,
-            "headers": headers,
-        })
-        solution = result.get("solution")
-        if not isinstance(solution, dict):
-            raise FlixCloudResolveError("FlareSolverr did not return a browser solution", 502)
-        status = solution.get("status")
-        if status not in (200, 201):
-            raise FlixCloudResolveError(
-                "FlixCloud returned HTTP " + str(status or "unknown") + " through FlareSolverr", 502
-            )
-        body = solution.get("response")
-        if not isinstance(body, str) or not body:
-            raise FlixCloudResolveError("FlareSolverr returned an empty FlixCloud response", 502)
-        if len(body.encode("utf-8")) > 5_000_000:
-            raise FlixCloudResolveError("FlixCloud response exceeded 5 MB", 502)
+    @staticmethod
+    def _challenge_check(body: str) -> None:
         lowered = body[:200_000].lower()
         if "just a moment" in lowered and "challenges.cloudflare.com" in lowered:
             raise FlixCloudResolveError(
                 "FlareSolverr could not complete the FlixCloud browser challenge", 403
             )
+
+    async def _flaresolverr_get(self, url: str, session_id: str, referer: str | None = None) -> str:
+        """Solve Cloudflare on the origin, then fetch the embed without running its page JavaScript.
+
+        The embed page can expose a one-use playback token. Navigating to that page in
+        Chromium may execute provider scripts that consume the token before our decryptor
+        requests it. Bootstrap the browser session on the origin instead, then reuse its
+        clearance cookies and User-Agent for a plain HTTP fetch of the embed HTML.
+        """
+        parsed = urlparse(url)
+        origin = parsed.scheme + "://" + parsed.netloc
+        bootstrap = await self._flaresolverr_post({
+            "cmd": "request.get",
+            "url": origin + "/",
+            "session": session_id,
+            "maxTimeout": settings.flixcloud_flaresolverr_timeout_seconds,
+            "headers": {"Accept": "text/html,application/xhtml+xml,*/*"},
+        })
+        solution = bootstrap.get("solution")
+        if not isinstance(solution, dict):
+            raise FlixCloudResolveError("FlareSolverr did not return an origin browser solution", 502)
+        if solution.get("status") not in (200, 201):
+            raise FlixCloudResolveError(
+                "FlixCloud origin returned HTTP " + str(solution.get("status") or "unknown"), 502
+            )
+        bootstrap_body = solution.get("response")
+        if isinstance(bootstrap_body, str):
+            self._challenge_check(bootstrap_body)
+
+        cookie_values: dict[str, str] = {}
+        for cookie in solution.get("cookies", []):
+            if not isinstance(cookie, dict):
+                continue
+            domain = str(cookie.get("domain") or "").lstrip(".").lower()
+            name, value = cookie.get("name"), cookie.get("value")
+            if domain in {"flixcloud.cc", "www.flixcloud.cc"} and isinstance(name, str) and isinstance(value, str):
+                cookie_values[name] = value
+        user_agent = solution.get("userAgent")
+        headers = {
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Referer": referer or origin + "/",
+        }
+        if isinstance(user_agent, str) and user_agent:
+            headers["User-Agent"] = user_agent
+        if self._client is None:
+            raise FlixCloudResolveError("FlixCloud resolver HTTP client has not started", 503)
+        try:
+            response = await self._client.get(
+                url, headers=headers, cookies=cookie_values, timeout=httpx.Timeout(45.0)
+            )
+        except httpx.TimeoutException as exc:
+            raise FlixCloudResolveError("FlixCloud embed request timed out", 504) from exc
+        except httpx.HTTPError as exc:
+            raise FlixCloudResolveError("Could not fetch FlixCloud embed (" + type(exc).__name__ + ")", 502) from exc
+        if response.status_code not in (200, 201):
+            raise FlixCloudResolveError(
+                "FlixCloud embed returned HTTP " + str(response.status_code) + " after browser bootstrap", 502
+            )
+        body = response.text
+        if not body:
+            raise FlixCloudResolveError("FlixCloud returned an empty embed response", 502)
+        if len(body.encode("utf-8")) > 5_000_000:
+            raise FlixCloudResolveError("FlixCloud response exceeded 5 MB", 502)
+        self._challenge_check(body)
         return body
 
     async def _run_decryptor(self, html: str, embed_url: str, session_id: str) -> dict[str, Any]:
