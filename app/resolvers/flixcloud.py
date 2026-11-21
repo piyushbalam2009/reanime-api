@@ -4,11 +4,14 @@ import asyncio
 import json
 import re
 import shutil
+import uuid
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
 import httpx
+
+from app.config import settings
 
 ALLOWED_EMBED_HOSTS = {"flixcloud.cc", "www.flixcloud.cc"}
 VIDEO_ID_PATTERNS = (
@@ -25,7 +28,7 @@ class FlixCloudResolveError(RuntimeError):
 
 
 class FlixCloudResolver:
-    """Resolve a fresh FlixCloud embed using its page-specific token and WASM payload."""
+    """Resolve authorized FlixCloud embeds with a dedicated FlareSolverr browser session."""
 
     def __init__(self, client: httpx.AsyncClient | None = None):
         self._client = client
@@ -34,12 +37,9 @@ class FlixCloudResolver:
     async def start(self) -> None:
         if self._client is None:
             self._client = httpx.AsyncClient(
-                timeout=httpx.Timeout(20.0),
+                timeout=httpx.Timeout(75.0),
                 follow_redirects=False,
-                headers={
-                    "User-Agent": "Mozilla/5.0 (compatible; ReAnimeAPI/0.1)",
-                    "Accept": "text/html,application/json;q=0.9,*/*;q=0.8",
-                },
+                headers={"Accept": "application/json"},
             )
 
     async def close(self) -> None:
@@ -100,7 +100,80 @@ class FlixCloudResolver:
             result.append(track)
         return result
 
-    async def _run_decryptor(self, html: str, embed_url: str) -> dict[str, Any]:
+    async def _flaresolverr_post(self, payload: dict[str, Any]) -> dict[str, Any]:
+        if self._client is None:
+            raise FlixCloudResolveError("FlixCloud resolver HTTP client has not started", 503)
+        base_url = settings.flixcloud_flaresolverr_url.rstrip("/")
+        try:
+            parsed = urlparse(base_url)
+        except ValueError as exc:
+            raise FlixCloudResolveError("Invalid FlareSolverr URL configuration", 500) from exc
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+            raise FlixCloudResolveError("Invalid FlareSolverr URL configuration", 500)
+        try:
+            response = await self._client.post(
+                base_url + "/v1", json=payload, timeout=httpx.Timeout(75.0)
+            )
+        except httpx.TimeoutException as exc:
+            raise FlixCloudResolveError("FlareSolverr request timed out", 504) from exc
+        except httpx.HTTPError as exc:
+            raise FlixCloudResolveError(
+                "Could not reach FlareSolverr (" + type(exc).__name__ + ")", 503
+            ) from exc
+        if not response.is_success:
+            raise FlixCloudResolveError("FlareSolverr returned HTTP " + str(response.status_code), 502)
+        try:
+            result = response.json()
+        except ValueError as exc:
+            raise FlixCloudResolveError("FlareSolverr returned invalid JSON", 502) from exc
+        if not isinstance(result, dict) or result.get("status") != "ok":
+            message = result.get("message", "unknown FlareSolverr error") if isinstance(result, dict) else "invalid response"
+            raise FlixCloudResolveError("FlareSolverr failed: " + str(message)[:180], 502)
+        return result
+
+    async def _create_browser_session(self) -> str:
+        session_id = "reanime-" + uuid.uuid4().hex
+        await self._flaresolverr_post({"cmd": "sessions.create", "session": session_id})
+        return session_id
+
+    async def _destroy_browser_session(self, session_id: str) -> None:
+        try:
+            await self._flaresolverr_post({"cmd": "sessions.destroy", "session": session_id})
+        except FlixCloudResolveError:
+            pass
+
+    async def _flaresolverr_get(self, url: str, session_id: str, referer: str | None = None) -> str:
+        headers = {"Accept": "text/html,application/json,*/*"}
+        if referer:
+            headers["Referer"] = referer
+        result = await self._flaresolverr_post({
+            "cmd": "request.get",
+            "url": url,
+            "session": session_id,
+            "maxTimeout": settings.flixcloud_flaresolverr_timeout_seconds,
+            "headers": headers,
+        })
+        solution = result.get("solution")
+        if not isinstance(solution, dict):
+            raise FlixCloudResolveError("FlareSolverr did not return a browser solution", 502)
+        status = solution.get("status")
+        if status not in (200, 201):
+            raise FlixCloudResolveError(
+                "FlixCloud returned HTTP " + str(status or "unknown") + " through FlareSolverr", 502
+            )
+        body = solution.get("response")
+        if not isinstance(body, str) or not body:
+            raise FlixCloudResolveError("FlareSolverr returned an empty FlixCloud response", 502)
+        if len(body.encode("utf-8")) > 5_000_000:
+            raise FlixCloudResolveError("FlixCloud response exceeded 5 MB", 502)
+        lowered = body[:200_000].lower()
+        if "just a moment" in lowered and "challenges.cloudflare.com" in lowered:
+            raise FlixCloudResolveError(
+                "FlareSolverr could not complete the FlixCloud browser challenge", 403
+            )
+        return body
+
+    async def _run_decryptor(self, html: str, embed_url: str, session_id: str) -> dict[str, Any]:
         node = shutil.which("node")
         if not node:
             raise FlixCloudResolveError("Node.js 20+ is required for FlixCloud playback resolution", 503)
@@ -109,13 +182,14 @@ class FlixCloudResolver:
         process = None
         try:
             process = await asyncio.create_subprocess_exec(
-                node, str(DECRYPTOR_PATH), embed_url,
+                node, str(DECRYPTOR_PATH), embed_url, session_id,
+                settings.flixcloud_flaresolverr_url.rstrip("/"),
                 stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
             stdout, stderr = await asyncio.wait_for(
-                process.communicate(html.encode("utf-8")), timeout=25
+                process.communicate(html.encode("utf-8")), timeout=70
             )
         except asyncio.TimeoutError as exc:
             if process is not None and process.returncode is None:
@@ -132,11 +206,11 @@ class FlixCloudResolver:
                     "FlixCloud rejected the one-time token (HTTP 410); no retry was attempted.", 410
                 )
             if "HTTP 401" in message:
-                raise FlixCloudResolveError("FlixCloud rejected the playback token request: " + message, 401)
+                raise FlixCloudResolveError("FlixCloud rejected the playback token request", 401)
             if "HTTP 403" in message:
-                raise FlixCloudResolveError("FlixCloud forbade the playback token request: " + message, 403)
+                raise FlixCloudResolveError("FlixCloud forbade the playback token request", 403)
             if "HTTP 429" in message:
-                raise FlixCloudResolveError("FlixCloud rate-limited the playback token request: " + message, 429)
+                raise FlixCloudResolveError("FlixCloud rate-limited the playback token request", 429)
             raise FlixCloudResolveError("FlixCloud decryption failed: " + (message or "unknown error"))
         try:
             payload = json.loads(stdout)
@@ -148,25 +222,13 @@ class FlixCloudResolver:
 
     async def resolve(self, embed_url: str) -> dict[str, Any]:
         embed_id, canonical_url = self.validate_embed_url(embed_url)
-        if self._client is None:
-            raise FlixCloudResolveError("FlixCloud resolver HTTP client has not started", 503)
+        session_id = await self._create_browser_session()
         try:
-            response = await self._client.get(canonical_url)
-        except httpx.TimeoutException as exc:
-            raise FlixCloudResolveError("FlixCloud embed request timed out", 504) from exc
-        except httpx.HTTPError as exc:
-            raise FlixCloudResolveError("FlixCloud embed request failed (" + type(exc).__name__ + ")") from exc
-        if response.status_code in (401, 403, 429):
-            raise FlixCloudResolveError(
-                "FlixCloud denied or rate-limited the embed request (HTTP " + str(response.status_code) + ")",
-                response.status_code,
-            )
-        if not response.is_success:
-            raise FlixCloudResolveError("FlixCloud embed returned HTTP " + str(response.status_code))
-        if len(response.content) > 5_000_000:
-            raise FlixCloudResolveError("FlixCloud embed response exceeded 5 MB", 502)
+            html = await self._flaresolverr_get(canonical_url, session_id)
+            data = await self._run_decryptor(html, canonical_url, session_id)
+        finally:
+            await self._destroy_browser_session(session_id)
 
-        data = await self._run_decryptor(response.text, canonical_url)
         stream_url = self._safe_https_url(data.get("url"))
         if not stream_url:
             raise FlixCloudResolveError("FlixCloud did not return a valid HTTPS stream URL")
@@ -176,7 +238,7 @@ class FlixCloudResolver:
         return {
             "source": "flixcloud",
             "embed_id": embed_id,
-            "video_id": str(data.get("video_id") or self._extract_video_id(response.text) or ""),
+            "video_id": str(data.get("video_id") or self._extract_video_id(html) or ""),
             "status": "playback_ready",
             "playback_ready": True,
             "url": stream_url,
