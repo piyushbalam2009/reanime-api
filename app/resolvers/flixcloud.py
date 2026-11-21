@@ -242,7 +242,7 @@ class FlixCloudResolver:
             raise FlixCloudResolveError("Could not start the FlixCloud decryptor") from exc
 
         if process.returncode != 0:
-            message = stderr.decode("utf-8", errors="replace").strip()[:400]
+            message = stderr.decode("utf-8", errors="replace").strip()[:1500]
             if "HTTP 410" in message:
                 raise FlixCloudResolveError(
                     "FlixCloud rejected the one-time token (HTTP 410); no retry was attempted.", 410
