@@ -104,7 +104,7 @@ async def status() -> dict[str, Any]:
             "website": settings.source_base_url,
             "adapter": "initialized",
             "access_mode": settings.source_access_mode,
-            "browser_challenge_integration": "disabled",
+            "browser_challenge_integration": "FlareSolverr",
         },
     }
 
