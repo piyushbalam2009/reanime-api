@@ -70,7 +70,7 @@ async function requestTokenMetadata(flaresolverrUrl, sessionId, embedUrl, token)
   } catch {
     // Chromium/FlareSolverr can wrap a JSON response in an HTML document
     // with the original response text inside a <pre> element.
-    const preMatch = body.match(/<pre\\b[^>]*>([\\s\\S]*?)<\\/pre>/i);
+    const preMatch = body.match(/<pre\b[^>]*>([\s\S]*?)<\/pre>/i);
     if (preMatch) {
       const extracted = preMatch[1]
         .replace(/&quot;/gi, '"')
