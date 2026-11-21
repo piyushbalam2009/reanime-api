@@ -13,7 +13,7 @@ from app.cache import get_json, set_json
 from app.config import settings
 from app.source import ReAnimeAdapter, SourceNotConfigured, SourceRequestError
 from app.resolvers.flixcloud import FlixCloudResolveError, FlixCloudResolver
-from app.hls_proxy import hls_proxy, proxy_url_for
+from app.hls_proxy import hls_proxy, proxy_url_for, store_playlist_key
 
 logging.basicConfig(level=getattr(logging, settings.log_level.upper(), logging.INFO))
 logger = logging.getLogger("reanime.api")
@@ -241,6 +241,9 @@ async def resolve_episode(
 
     embed_url = selected.get("dataLink")
     result = await flixcloud_resolver.resolve(embed_url)
+    playlist_key = result.pop("playlist_key", None)
+    if playlist_key and result.get("video_id"):
+        store_playlist_key(result["video_id"], playlist_key)
     result["url"] = proxy_url_for(request, result["url"])
     for subtitle in result.get("subtitles") or []:
         if isinstance(subtitle, dict) and subtitle.get("url"):
