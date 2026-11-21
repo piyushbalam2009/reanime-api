@@ -4,7 +4,7 @@ import pytest
 from fastapi import HTTPException
 from starlette.requests import Request
 
-from app.hls_proxy import rewrite_playlist, validate_upstream_url
+from app.hls_proxy import proxy_url_for, rewrite_playlist, validate_upstream_url
 
 
 def _request():
@@ -55,3 +55,11 @@ def test_rewrite_playlist_rewrites_relative_segments_and_uri_attributes():
         parsed = urlsplit(value)
         assert parsed.path == "/api/proxy/hls"
         assert parse_qs(parsed.query)["url"][0].startswith("https://fetch8.flixcloud.cc/path/")
+
+
+def test_proxy_url_for_builds_api_url_for_hls_and_subtitle_resources():
+    target = "https://fetch8.flixcloud.cc/master.m3u8?token=abc"
+    value = proxy_url_for(_request(), target)
+    parsed = urlsplit(value)
+    assert parsed.path == "/api/proxy/hls"
+    assert parse_qs(parsed.query)["url"] == [target]
