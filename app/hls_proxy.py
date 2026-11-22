@@ -1,6 +1,7 @@
 import base64
 import binascii
 import ipaddress
+import logging
 import re
 import time
 from urllib.parse import urljoin, urlsplit, urlencode
@@ -10,6 +11,8 @@ from fastapi import HTTPException, Query, Request
 from fastapi.responses import PlainTextResponse, StreamingResponse
 
 from app.config import settings
+
+logger = logging.getLogger("reanime.hls")
 
 _URI_ATTRIBUTE = re.compile(r'URI="([^"]+)"', re.IGNORECASE)
 _TIMEOUT = httpx.Timeout(45.0, connect=10.0)
@@ -264,9 +267,17 @@ async def hls_proxy(
                         },
                     )
             raw_payload = bytes(payload)
+            playlist_key = _playlist_key_for_url(target)
+            logger.info(
+                "FlixCloud playlist decode diagnostic: video_id_match=%s key_found=%s key_length=%s payload_bytes=%s",
+                bool(re.search(r"/_v\\d+/[A-Za-z0-9-]{8,128}/", urlsplit(target).path)),
+                playlist_key is not None,
+                len(playlist_key) if playlist_key else 0,
+                len(raw_payload),
+            )
 
             try:
-                body = _decode_playlist(raw_payload, content_type, _playlist_key_for_url(target))
+                body = _decode_playlist(raw_payload, content_type, playlist_key)
             except HTTPException as exc:
                 if isinstance(exc.detail, dict) and exc.detail.get("error") == "upstream_not_hls":
                     preview = raw_payload.decode("utf-8", errors="replace")
