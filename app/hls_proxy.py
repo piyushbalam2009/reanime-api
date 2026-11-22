@@ -270,7 +270,7 @@ async def hls_proxy(
             playlist_key = _playlist_key_for_url(target)
             logger.info(
                 "FlixCloud playlist decode diagnostic: video_id_match=%s key_found=%s key_length=%s payload_bytes=%s",
-                bool(re.search(r"/_v\\d+/[A-Za-z0-9-]{8,128}/", urlsplit(target).path)),
+                bool(re.search(r"/_v\d+/[A-Za-z0-9-]{8,128}/", urlsplit(target).path)),
                 playlist_key is not None,
                 len(playlist_key) if playlist_key else 0,
                 len(raw_payload),
