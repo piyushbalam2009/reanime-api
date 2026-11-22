@@ -242,8 +242,17 @@ async def resolve_episode(
     embed_url = selected.get("dataLink")
     result = await flixcloud_resolver.resolve(embed_url)
     playlist_key = result.pop("playlist_key", None)
+    stored = False
     if playlist_key and result.get("video_id"):
-        store_playlist_key(result["video_id"], playlist_key)
+        stored = store_playlist_key(result["video_id"], playlist_key)
+
+    logger.info(
+        "FlixCloud playlist key diagnostic: video_id_present=%s key_present=%s key_length=%s stored=%s",
+        bool(result.get("video_id")),
+        bool(playlist_key),
+        len(playlist_key) if isinstance(playlist_key, str) else 0,
+        stored,
+    )
     result["url"] = proxy_url_for(request, result["url"])
     for subtitle in result.get("subtitles") or []:
         if isinstance(subtitle, dict) and subtitle.get("url"):
